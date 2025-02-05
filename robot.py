@@ -17,6 +17,7 @@ import os
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 @app.route("/webhook", methods=["POST"])
+
 def whatsapp_reply():
     incoming_msg = request.form.get("Body", "").strip().lower()
     sender_number = request.form.get("From")
@@ -41,4 +42,6 @@ def whatsapp_reply():
     return str(resp)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import os
+    port = int(os.environ.get("PORT", 10000))  # Cambia al puerto que Render asigna
+    app.run(host="0.0.0.0", port=port, debug=True)
