@@ -2,22 +2,16 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import openai
 import requests
+import os
 
 app = Flask(__name__)
 
 # 🔹 Configuración de Twilio
-import os
-
 account_sid = os.getenv("TWILIO_ACCOUNT_SID")
 auth_token = os.getenv("TWILIO_AUTH_TOKEN")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
-# 🔹 API Key de OpenAI
-import os
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
 @app.route("/webhook", methods=["POST"])
-
 def whatsapp_reply():
     incoming_msg = request.form.get("Body", "").strip().lower()
     sender_number = request.form.get("From")
@@ -37,11 +31,11 @@ def whatsapp_reply():
         respuesta_ia = response["choices"][0]["message"]["content"].strip()
         msg.body(respuesta_ia)
     except Exception as e:
+        print(f"Error con OpenAI: {e}")  # Para depuración en los logs de Render
         msg.body("Lo siento, no puedo responder en este momento.")
 
     return str(resp)
 
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))  # Usa el puerto de Render si está disponible
+    port = int(os.environ.get("PORT", 10000))  # Usa el puerto de Render
     app.run(host="0.0.0.0", port=port, debug=True)
