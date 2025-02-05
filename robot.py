@@ -43,5 +43,5 @@ def whatsapp_reply():
 
 if __name__ == "__main__":
     import os
-    port = int(os.environ.get("PORT", 10000))  # Cambia al puerto que Render asigna
+    port = int(os.environ.get("PORT", 10000))  # Usa el puerto de Render si está disponible
     app.run(host="0.0.0.0", port=port, debug=True)
