@@ -12,28 +12,27 @@ app = Flask(__name__)
 # Configuración de logs
 logging.basicConfig(level=logging.DEBUG)
 
-# API Keys desde Environment Variables en Render
+# API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 
-# Configurar cliente OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📍 **Ubicación fija y precisa de Sonrisas Hollywood**
+# 📍 **Ubicación fija**
 DIRECCION_CLINICA = "Calle Colón 48, Valencia, España"
 LINK_GOOGLE_MAPS = "https://g.co/kgs/Y1h3Tb9"
 
-# 📌 **Ofertas actuales de Sonrisas Hollywood (sin precios)**
-OFERTAS_CLINICA = [
-    "✨ Descuento especial en blanqueamiento dental.",
-    "💎 Diseño de sonrisa con materiales de alta calidad.",
-    "🌟 Consulta gratuita en tratamientos de Medicina Estética Facial.",
-]
+# 💰 **Precios actualizados**
+PRECIOS = {
+    "carillas composite": "2.500 € por arcada o 4.500 € por ambas arcadas.",
+    "botox": "Desde 7 € por unidad.",
+    "ácido hialurónico": "Desde 350 € por vial."
+}
 
-# 📌 **Almacenar datos de conversación temporalmente**
+# 🛠 **Memoria de conversación**
 conversaciones = {}
 
-# 📌 **Función para consultar disponibilidad en Koibox**
+# 📌 **Consulta disponibilidad en Koibox**
 def verificar_disponibilidad():
     url = "https://api.koibox.cloud/agenda/disponibilidad"
     headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
@@ -43,26 +42,18 @@ def verificar_disponibilidad():
         return response.json()
     return None
 
-# 📌 **Función para agendar cita en Koibox**
+# 📌 **Agendar cita en Koibox**
 def agendar_cita(nombre, telefono, servicio, fecha):
     url = "https://api.koibox.cloud/agenda/citas"
-    headers = {
-        "Authorization": f"Bearer {KOIBOX_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    datos = {
-        "nombre": nombre,
-        "telefono": telefono,
-        "servicio": servicio,
-        "fecha": fecha
-    }
+    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}", "Content-Type": "application/json"}
+    datos = {"nombre": nombre, "telefono": telefono, "servicio": servicio, "fecha": fecha}
     response = requests.post(url, json=datos, headers=headers, verify=False)
 
     if response.status_code == 201:
-        return f"✅ Cita confirmada para {nombre} el {fecha} para {servicio}. Te esperamos en Sonrisas Hollywood en {DIRECCION_CLINICA}."
+        return f"✅ Cita confirmada para {nombre} el {fecha} para {servicio}. Te esperamos en {DIRECCION_CLINICA}."
     return "❌ No se pudo agendar la cita. Inténtalo más tarde."
 
-# 📌 **Webhook para recibir mensajes de WhatsApp**
+# 📌 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def whatsapp_reply():
     logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
@@ -75,7 +66,6 @@ def whatsapp_reply():
 
     print(f"📩 Mensaje recibido de {sender_number}: {incoming_msg}")
 
-    # Inicializar conversación del usuario si no existe
     if sender_number not in conversaciones:
         conversaciones[sender_number] = {}
 
@@ -85,31 +75,36 @@ def whatsapp_reply():
     # 📌 **Detección automática de idioma**
     try:
         lang = detect(incoming_msg)
+        if lang not in ["es", "en", "fr", "pt"]:
+            lang = "es"
     except:
-        lang = "es"  # Si no se detecta, responde en español
+        lang = "es"
 
-    # 📌 **Ubicación de la clínica**
-    if "ubicación" in incoming_msg or "dirección" in incoming_msg:
-        msg.body(f"📍 Nos encontramos en {DIRECCION_CLINICA}. Aquí tienes nuestra ubicación en Google Maps: {LINK_GOOGLE_MAPS}")
+    # 📍 **Ubicación de la clínica**
+    if any(word in incoming_msg for word in ["dónde estáis", "ubicación", "dirección"]):
+        msg.body(f"📍 Estamos en {DIRECCION_CLINICA}. Aquí tienes nuestra ubicación en Google Maps: {LINK_GOOGLE_MAPS}")
 
-    # 📌 **Consulta de ofertas**
-    elif "oferta" in incoming_msg or "promoción" in incoming_msg:
-        ofertas_msg = "\n".join(OFERTAS_CLINICA)
-        msg.body(f"📢 ¡Promociones de Sonrisas Hollywood!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
+    # 💰 **Consulta de precios**
+    elif "cuánto cuesta" in incoming_msg or "precio" in incoming_msg:
+        for tratamiento, precio in PRECIOS.items():
+            if tratamiento in incoming_msg:
+                msg.body(f"💰 El precio de {tratamiento} es {precio}. ¿Quieres agendar una cita?")
+                break
+        else:
+            msg.body("💰 Indícame qué tratamiento deseas saber el precio y te lo diré.")
 
-    # 📌 **Disponibilidad en agenda**
+    # 📅 **Disponibilidad en agenda**
     elif "disponible" in incoming_msg or "agenda" in incoming_msg:
         disponibilidad = verificar_disponibilidad()
         if disponibilidad:
-            msg.body("📅 Hay disponibilidad en la agenda. ¿Te gustaría agendar una cita?")
+            msg.body("📅 Hay disponibilidad en la agenda. ¿Quieres agendar una cita?")
         else:
             msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
 
-    # 📌 **Recepción de datos para cita**
+    # 📝 **Registro de datos para cita**
     elif "cita" in incoming_msg or "reservar" in incoming_msg:
         msg.body("😊 Para agendar tu cita dime:\n\n1️⃣ Tu nombre completo\n2️⃣ Tu teléfono\n3️⃣ El servicio que deseas\n4️⃣ La fecha y hora deseada")
 
-    # 📌 **Registro progresivo de datos**
     elif any(word in incoming_msg for word in ["botox", "relleno", "ácido hialurónico", "carillas", "implante"]):
         conversaciones[sender_number]["servicio"] = incoming_msg
         msg.body("📅 ¿Para qué fecha y hora deseas la cita?")
@@ -131,7 +126,7 @@ def whatsapp_reply():
 
             resultado = agendar_cita(nombre, telefono, servicio, fecha)
             msg.body(resultado)
-            del conversaciones[sender_number]  # Limpiar datos tras agendar
+            del conversaciones[sender_number]
 
         else:
             msg.body("❌ No he podido procesar tu nombre y teléfono. Intenta de nuevo.")
