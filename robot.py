@@ -4,7 +4,6 @@ import openai
 import os
 import requests
 import logging
-import re
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
@@ -14,100 +13,85 @@ logging.basicConfig(level=logging.DEBUG)
 
 # API Keys desde Environment Variables en Render
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-KOIBOX_USER = os.getenv("KOIBOX_USER")
-KOIBOX_PASSWORD = os.getenv("KOIBOX_PASSWORD")
-
-# 📍 Dirección oficial de la clínica
-DIRECCION_CLINICA = "Sonrisas Hollywood - Calle Colón 48, Valencia"
-GOOGLE_MAPS_URL = "https://g.co/kgs/Y1h3Tb9"
+KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📌 Función para obtener el token de Koibox
-def obtener_token_koibox():
-    url = "https://api.koibox.es/api/auth/login"
-    payload = {"username": KOIBOX_USER, "password": KOIBOX_PASSWORD}
-    headers = {"Content-Type": "application/json"}
+# 📌 Datos de la clínica
+DIRECCION_CLINICA = "Calle Colón 48, Valencia"
+GOOGLE_MAPS_URL = "https://g.co/kgs/Y1h3Tb9"
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, verify=False)
-        if response.status_code == 200:
-            token = response.json().get("token")
-            logging.debug("✅ Token de Koibox obtenido correctamente.")
-            return token
-        else:
-            logging.error(f"❌ Error autenticando en Koibox: {response.status_code} - {response.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"❌ Error de conexión con Koibox: {e}")
-        return None
-
-# 📌 Función para verificar disponibilidad en Koibox
-def verificar_disponibilidad():
-    token = obtener_token_koibox()
-    if not token:
-        return None
-
-    url = "https://api.koibox.es/api/agenda/disponibilidad"
-    headers = {"Authorization": f"Bearer {token}"}
-
-    try:
-        response = requests.get(url, headers=headers, verify=False)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"❌ Error obteniendo disponibilidad: {response.status_code} - {response.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"❌ Error de conexión con Koibox: {e}")
-        return None
-
-# 📌 Función para convertir fechas relativas
-def convertir_fecha(texto):
+# 📌 Función para convertir fechas en formato legible
+def interpretar_fecha(mensaje):
     hoy = datetime.today()
-    dias_semana = {"lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3,
-                   "viernes": 4, "sábado": 5, "domingo": 6}
 
-    if "mañana" in texto.lower():
+    if "hoy" in mensaje:
+        return hoy.strftime("%Y-%m-%d")
+
+    elif "mañana" in mensaje:
         return (hoy + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if "pasado mañana" in texto.lower():
-        return (hoy + timedelta(days=2)).strftime("%Y-%m-%d")
+    elif "lunes" in mensaje:
+        dias_hasta_lunes = (7 - hoy.weekday()) % 7
+        if dias_hasta_lunes == 0:
+            dias_hasta_lunes = 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_lunes)
+        return fecha_obj.strftime("%Y-%m-%d")
 
-    match = re.search(r"próximo (\w+)", texto.lower())
-    if match:
-        dia = match.group(1)
-        if dia in dias_semana:
-            dia_solicitado = dias_semana[dia]
-            dias_diferencia = (dia_solicitado - hoy.weekday() + 7) % 7
-            dias_diferencia = 7 if dias_diferencia == 0 else dias_diferencia
-            return (hoy + timedelta(days=dias_diferencia)).strftime("%Y-%m-%d")
+    elif "martes" in mensaje:
+        dias_hasta_martes = (8 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_martes)
+        return fecha_obj.strftime("%Y-%m-%d")
 
-    return None
+    elif "miércoles" in mensaje or "miercoles" in mensaje:
+        dias_hasta_miercoles = (9 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_miercoles)
+        return fecha_obj.strftime("%Y-%m-%d")
 
-# 📌 Función para agendar cita en Koibox
+    elif "jueves" in mensaje:
+        dias_hasta_jueves = (10 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_jueves)
+        return fecha_obj.strftime("%Y-%m-%d")
+
+    elif "viernes" in mensaje:
+        dias_hasta_viernes = (11 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_viernes)
+        return fecha_obj.strftime("%Y-%m-%d")
+
+    elif "sábado" in mensaje or "sabado" in mensaje:
+        dias_hasta_sabado = (12 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_sabado)
+        return fecha_obj.strftime("%Y-%m-%d")
+
+    elif "domingo" in mensaje:
+        dias_hasta_domingo = (13 - hoy.weekday()) % 7
+        fecha_obj = hoy + timedelta(days=dias_hasta_domingo)
+        return fecha_obj.strftime("%Y-%m-%d")
+
+    return None  # No se encontró una fecha válida
+
+# 📌 Función para agendar una cita en Koibox
 def agendar_cita(nombre, telefono, servicio, fecha):
-    token = obtener_token_koibox()
-    if not token:
-        return "❌ Error autenticando con Koibox."
+    url = "https://api.koibox.es/v1/agenda/citas"
+    headers = {
+        "Authorization": f"Bearer {KOIBOX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    datos = {
+        "nombre": nombre,
+        "telefono": telefono,
+        "servicio": servicio,
+        "fecha": fecha
+    }
+    response = requests.post(url, json=datos, headers=headers, verify=False)
 
-    url = "https://api.koibox.es/api/agenda/citas"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    datos = {"nombre": nombre, "telefono": telefono, "servicio": servicio, "fecha": fecha}
+    if response.status_code == 201:
+        return "✅ Cita agendada con éxito en Koibox."
+    else:
+        return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
 
-    try:
-        response = requests.post(url, json=datos, headers=headers, verify=False)
-        if response.status_code == 201:
-            return f"✅ Cita agendada con éxito para {nombre} el {fecha}. Te esperamos en Sonrisas Hollywood."
-        else:
-            logging.error(f"❌ Error agendando cita: {response.status_code} - {response.text}")
-            return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
-    except requests.exceptions.RequestException as e:
-        logging.error(f"❌ Error de conexión con Koibox: {e}")
-        return "❌ Error en el sistema. Intenta más tarde."
-
-# 📌 Webhook para WhatsApp
+# 📌 Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def whatsapp_reply():
     logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
@@ -125,49 +109,53 @@ def whatsapp_reply():
     msg = resp.message()
 
     # 📍 Respuesta sobre la ubicación de la clínica
-    if "dónde está" in incoming_msg or "ubicación" in incoming_msg or "dirección" in incoming_msg:
-        msg.body(f"📍 Sonrisas Hollywood está en: {DIRECCION_CLINICA}\nGoogle Maps: {GOOGLE_MAPS_URL}")
+    if any(word in incoming_msg for word in ["dónde está", "ubicación", "dirección", "cómo llegar"]):
+        msg.body(f"📍 Nuestra clínica Sonrisas Hollywood está en: {DIRECCION_CLINICA}\nGoogle Maps: {GOOGLE_MAPS_URL}")
+        return Response(str(resp), status=200, mimetype="application/xml")
 
-    # 📅 Verificar disponibilidad en Koibox
-    elif "disponible" in incoming_msg or "agenda" in incoming_msg:
-        disponibilidad = verificar_disponibilidad()
-        if disponibilidad:
-            msg.body("📅 Hay disponibilidad en la agenda. ¿Te gustaría agendar una cita?")
+    # 📅 Si piden agendar una cita
+    elif "cita" in incoming_msg or "quiero una cita" in incoming_msg:
+        fecha = interpretar_fecha(incoming_msg)
+        if fecha:
+            msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas")
         else:
-            msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
+            msg.body("📅 Por favor, dime también la fecha en la que quieres la cita.")
+        return Response(str(resp), status=200, mimetype="application/xml")
 
-    # 📆 Preguntar por datos de la cita
-    elif "cita" in incoming_msg:
-        msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas \n4️⃣ La fecha y hora deseada")
+    # 📌 Si recibe los datos de la cita
+    elif any(word in incoming_msg for word in ["botox", "relleno", "hilos", "ácido hialurónico", "ortodoncia"]):
+        palabras = incoming_msg.split()
+        if len(palabras) >= 3:
+            nombre = palabras[0] + " " + palabras[1]  # Primeras dos palabras como nombre
+            telefono = palabras[2]  # Tercera palabra como teléfono
+            servicio = " ".join(palabras[3:])  # Resto como servicio
+            fecha = interpretar_fecha(incoming_msg)
 
-    # 📌 Agendar automáticamente si reconoce los datos
+            if fecha:
+                resultado = agendar_cita(nombre, telefono, servicio, fecha)
+                msg.body(f"📆 {resultado}")
+            else:
+                msg.body("❌ No entendí la fecha. Dime un día específico para agendar.")
+        else:
+            msg.body("❌ No entendí bien los datos. Envíame: Nombre, Teléfono, Servicio y Fecha.")
+        return Response(str(resp), status=200, mimetype="application/xml")
+
+    # 📌 Consulta a OpenAI (para todo lo demás)
     else:
-        patron = re.search(r"([a-zA-Z\s]+)\s(\d{9})\s([\w\s]+)\s([\w\s]+)", incoming_msg)
-        if patron:
-            nombre = patron.group(1).title()
-            telefono = patron.group(2)
-            servicio = patron.group(3).title()
-            fecha_texto = patron.group(4)
-            fecha = convertir_fecha(fecha_texto) or fecha_texto
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood. No menciones precios en WhatsApp."},
+                    {"role": "user", "content": incoming_msg}
+                ]
+            )
+            respuesta_ia = response["choices"][0]["message"]["content"].strip()
+            msg.body(respuesta_ia)
 
-            confirmacion = agendar_cita(nombre, telefono, servicio, fecha)
-            msg.body(confirmacion)
-
-        else:
-            try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood."},
-                        {"role": "user", "content": incoming_msg}
-                    ]
-                )
-                respuesta_ia = response["choices"][0]["message"]["content"].strip()
-                msg.body(respuesta_ia)
-
-            except openai.error.OpenAIError as e:
-                print(f"⚠️ Error con OpenAI: {e}")
-                msg.body("❌ Error de sistema. Intenta más tarde.")
+        except openai.error.OpenAIError as e:
+            print(f"⚠️ Error con OpenAI: {e}")
+            msg.body("❌ Error de sistema. Intenta más tarde.")
 
     logging.debug(f"📤 Respuesta enviada a Twilio: {str(resp)}")
 
