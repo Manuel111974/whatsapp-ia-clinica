@@ -4,6 +4,7 @@ import openai
 import os
 import requests
 import logging
+import re
 
 app = Flask(__name__)
 
@@ -18,61 +19,76 @@ KOIBOX_PASSWORD = os.getenv("KOIBOX_PASSWORD")
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📌 Ofertas actuales de Sonrisas Hollywood
-OFERTAS_CLINICA = [
-    "✨ Descuento en tratamientos de blanqueamiento dental.",
-    "🌟 Promoción especial en diseño de sonrisa.",
-    "💆 Consulta gratuita para nuevos pacientes en Medicina Estética Facial."
-]
-
-# 🔹 Función para obtener Token de Koibox
+# 📌 Función para autenticar en Koibox y obtener un token
 def obtener_token_koibox():
-    url = "https://api.koibox.cloud/auth"
-    data = {"user": KOIBOX_USER, "password": KOIBOX_PASSWORD}
-    response = requests.post(url, json=data)
-    
-    if response.status_code == 200:
-        return response.json().get("token")
-    else:
+    url = "https://api.koibox.es/api/auth/login"
+    payload = {"username": KOIBOX_USER, "password": KOIBOX_PASSWORD}
+    headers = {"Content-Type": "application/json"}
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, verify=False)
+        if response.status_code == 200:
+            token = response.json().get("token")
+            logging.debug(f"✅ Token de Koibox obtenido correctamente")
+            return token
+        else:
+            logging.error(f"❌ Error autenticando en Koibox: {response.status_code} - {response.text}")
+            return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Error en la conexión con Koibox: {e}")
         return None
 
-# 🔹 Función para consultar disponibilidad en Koibox
+# 📌 Función para verificar disponibilidad en Koibox
 def verificar_disponibilidad():
     token = obtener_token_koibox()
     if not token:
         return None
-    
-    url = "https://api.koibox.cloud/v1/agenda/disponibilidad"
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(url, headers=headers)
 
-    if response.status_code == 200:
-        return response.json()
-    else:
+    url = "https://api.koibox.es/api/agenda/disponibilidad"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        if response.status_code == 200:
+            disponibilidad = response.json()
+            return disponibilidad
+        else:
+            logging.error(f"❌ Error obteniendo disponibilidad: {response.status_code} - {response.text}")
+            return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Error en la conexión con Koibox: {e}")
         return None
 
-# 🔹 Función para agendar cita en Koibox
-def agendar_cita(nombre, telefono, servicio, fecha, hora):
+# 📌 Función para agendar una cita en Koibox
+def agendar_cita(nombre, telefono, servicio, fecha):
     token = obtener_token_koibox()
     if not token:
-        return "❌ No se pudo autenticar con Koibox."
+        return "❌ Error autenticando con Koibox."
 
-    url = "https://api.koibox.cloud/v1/agenda/citas"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    datos = {
-        "paciente": {"nombre": nombre, "telefono": telefono},
-        "servicio": servicio,
-        "fecha": fecha,
-        "hora": hora
+    url = "https://api.koibox.es/api/agenda/citas"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
     }
-    response = requests.post(url, json=datos, headers=headers)
+    datos = {
+        "nombre": nombre,
+        "telefono": telefono,
+        "servicio": servicio,
+        "fecha": fecha
+    }
 
-    if response.status_code == 201:
-        return "✅ Cita agendada con éxito. Te esperamos en Sonrisas Hollywood."
-    else:
-        return "❌ Hubo un problema al agendar la cita."
+    try:
+        response = requests.post(url, json=datos, headers=headers, verify=False)
+        if response.status_code == 201:
+            return f"✅ Cita agendada con éxito para {nombre} el {fecha}. Te esperamos en Sonrisas Hollywood."
+        else:
+            logging.error(f"❌ Error agendando cita: {response.status_code} - {response.text}")
+            return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Error en la conexión con Koibox: {e}")
+        return "❌ Error en el sistema. Intenta más tarde."
 
-# 🔹 Webhook para recibir mensajes de WhatsApp
+# 📌 Webhook para WhatsApp
 @app.route("/webhook", methods=["POST"])
 def whatsapp_reply():
     logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
@@ -81,41 +97,57 @@ def whatsapp_reply():
     sender_number = request.form.get("From")
 
     if not incoming_msg:
-        return Response("<Response><Message>No se recibió mensaje.</Message></Response>", status=200, mimetype="application/xml")
+        return Response("<Response><Message>No se recibió mensaje.</Message></Response>",
+                        status=200, mimetype="application/xml")
 
     print(f"📩 Mensaje recibido de {sender_number}: {incoming_msg}")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    # 🔹 Si pregunta por ofertas
-    if "oferta" in incoming_msg or "promoción" in incoming_msg:
-        ofertas_msg = "\n".join(OFERTAS_CLINICA)
-        msg.body(f"📢 ¡Promociones de Sonrisas Hollywood!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
-
-    # 🔹 Si pregunta por disponibilidad
-    elif "disponible" in incoming_msg or "agenda" in incoming_msg:
+    # 📌 Verificar disponibilidad en Koibox
+    if "disponible" in incoming_msg or "agenda" in incoming_msg:
         disponibilidad = verificar_disponibilidad()
         if disponibilidad:
             msg.body("📅 Hay disponibilidad en la agenda. ¿Te gustaría agendar una cita?")
         else:
             msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
 
-    # 🔹 Si pide agendar cita
+    # 📌 Preguntar por datos de la cita
     elif "cita" in incoming_msg:
-        msg.body("😊 Para agendar tu cita dime:\n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas \n4️⃣ Fecha y hora preferida.")
+        msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas \n4️⃣ La fecha y hora deseada")
 
-    # 🔹 Si recibe datos personales
-    elif any(word in incoming_msg for word in ["dni", "dirección", "edad", "correo", "tarjeta"]):
-        msg.body("⚠️ Por seguridad, no podemos procesar datos personales por WhatsApp. Llámanos para más información.")
-
-    # 🔹 Respuesta de OpenAI
+    # 📌 Intentar detectar y agendar la cita automáticamente
     else:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood."}, {"role": "user", "content": incoming_msg}]
-        )
-        msg.body(response["choices"][0]["message"]["content"].strip())
+        # Expresión regular para detectar datos de cita en el mensaje
+        patron = re.search(r"([a-zA-Z\s]+)\s(\d{9})\s([\w\s]+)\s(\d{1,2}/\d{1,2}/\d{4} \d{2}:\d{2})", incoming_msg)
+        
+        if patron:
+            nombre = patron.group(1).title()
+            telefono = patron.group(2)
+            servicio = patron.group(3).title()
+            fecha = patron.group(4)
+
+            confirmacion = agendar_cita(nombre, telefono, servicio, fecha)
+            msg.body(confirmacion)
+        
+        else:
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood. Solo agendas citas si se proporcionan nombre, teléfono, servicio y fecha."},
+                        {"role": "user", "content": incoming_msg}
+                    ]
+                )
+                respuesta_ia = response["choices"][0]["message"]["content"].strip()
+                msg.body(respuesta_ia)
+
+            except openai.error.OpenAIError as e:
+                print(f"⚠️ Error con OpenAI: {e}")
+                msg.body("❌ Error de sistema. Intenta más tarde.")
+
+    logging.debug(f"📤 Respuesta enviada a Twilio: {str(resp)}")
 
     return Response(str(resp), status=200, mimetype="application/xml")
 
