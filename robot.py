@@ -11,63 +11,68 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 # API Keys desde Environment Variables en Render
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Configurada en Render
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")  # Asegúrate de configurarla en Render
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+KOIBOX_USER = os.getenv("KOIBOX_USER")
+KOIBOX_PASSWORD = os.getenv("KOIBOX_PASSWORD")
 
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📌 **Información de la clínica**
-NOMBRE_CLINICA = "Sonrisas Hollywood"
-UBICACION_CLINICA = "Calle Colón 48, Valencia"
-GOOGLE_MAPS_LINK = "https://g.co/kgs/Y1h3Tb9"
-
-# 📌 **Ofertas actuales** (sin precios)
+# 📌 Ofertas actuales de Sonrisas Hollywood
 OFERTAS_CLINICA = [
-    "Descuento en tratamientos de blanqueamiento dental.",
-    "Promoción especial en diseño de sonrisa.",
-    "Consulta gratuita para nuevos pacientes en Medicina Estética Facial.",
+    "✨ Descuento en tratamientos de blanqueamiento dental.",
+    "🌟 Promoción especial en diseño de sonrisa.",
+    "💆 Consulta gratuita para nuevos pacientes en Medicina Estética Facial."
 ]
 
-# 📌 **Función para verificar disponibilidad en Koibox**
-def verificar_disponibilidad():
-    url = "https://api.koibox.es/v1/agenda/disponibilidad"
-    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
-
-    try:
-        response = requests.get(url, headers=headers, verify=False)  # Desactiva verificación SSL
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error en la API de Koibox: {e}")
+# 🔹 Función para obtener Token de Koibox
+def obtener_token_koibox():
+    url = "https://api.koibox.cloud/auth"
+    data = {"user": KOIBOX_USER, "password": KOIBOX_PASSWORD}
+    response = requests.post(url, json=data)
+    
+    if response.status_code == 200:
+        return response.json().get("token")
+    else:
         return None
 
-# 📌 **Función para agendar una cita en Koibox**
-def agendar_cita(nombre, telefono, servicio):
-    url = "https://api.koibox.es/v1/agenda/citas"
-    headers = {
-        "Authorization": f"Bearer {KOIBOX_API_KEY}",
-        "Content-Type": "application/json"
-    }
+# 🔹 Función para consultar disponibilidad en Koibox
+def verificar_disponibilidad():
+    token = obtener_token_koibox()
+    if not token:
+        return None
+    
+    url = "https://api.koibox.cloud/v1/agenda/disponibilidad"
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
+
+# 🔹 Función para agendar cita en Koibox
+def agendar_cita(nombre, telefono, servicio, fecha, hora):
+    token = obtener_token_koibox()
+    if not token:
+        return "❌ No se pudo autenticar con Koibox."
+
+    url = "https://api.koibox.cloud/v1/agenda/citas"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     datos = {
-        "nombre": nombre,
-        "telefono": telefono,
+        "paciente": {"nombre": nombre, "telefono": telefono},
         "servicio": servicio,
+        "fecha": fecha,
+        "hora": hora
     }
+    response = requests.post(url, json=datos, headers=headers)
 
-    try:
-        response = requests.post(url, json=datos, headers=headers, verify=False)  # Desactiva verificación SSL
-        if response.status_code == 201:
-            return f"✅ Cita agendada con éxito en {NOMBRE_CLINICA}. Te esperamos en {UBICACION_CLINICA}."
-        else:
-            return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error en la API de Koibox: {e}")
-        return "❌ No se pudo conectar con el sistema de citas. Intenta más tarde."
+    if response.status_code == 201:
+        return "✅ Cita agendada con éxito. Te esperamos en Sonrisas Hollywood."
+    else:
+        return "❌ Hubo un problema al agendar la cita."
 
-# 📌 **Webhook para recibir mensajes de WhatsApp**
+# 🔹 Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def whatsapp_reply():
     logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
@@ -76,24 +81,19 @@ def whatsapp_reply():
     sender_number = request.form.get("From")
 
     if not incoming_msg:
-        return Response("<Response><Message>No se recibió mensaje.</Message></Response>",
-                        status=200, mimetype="application/xml")
+        return Response("<Response><Message>No se recibió mensaje.</Message></Response>", status=200, mimetype="application/xml")
 
     print(f"📩 Mensaje recibido de {sender_number}: {incoming_msg}")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    # 📌 **Si preguntan por la ubicación**
-    if "dónde están" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body(f"📍 Estamos en {UBICACION_CLINICA}. Puedes encontrarnos en Google Maps aquí: {GOOGLE_MAPS_LINK}")
-
-    # 📌 **Si preguntan por ofertas**
-    elif "oferta" in incoming_msg or "promoción" in incoming_msg:
+    # 🔹 Si pregunta por ofertas
+    if "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas_msg = "\n".join(OFERTAS_CLINICA)
-        msg.body(f"📢 ¡Promociones de {NOMBRE_CLINICA}!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
+        msg.body(f"📢 ¡Promociones de Sonrisas Hollywood!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
 
-    # 📌 **Si preguntan por disponibilidad**
+    # 🔹 Si pregunta por disponibilidad
     elif "disponible" in incoming_msg or "agenda" in incoming_msg:
         disponibilidad = verificar_disponibilidad()
         if disponibilidad:
@@ -101,41 +101,21 @@ def whatsapp_reply():
         else:
             msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
 
-    # 📌 **Si piden agendar una cita**
+    # 🔹 Si pide agendar cita
     elif "cita" in incoming_msg:
-        msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas")
+        msg.body("😊 Para agendar tu cita dime:\n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas \n4️⃣ Fecha y hora preferida.")
 
-    # 📌 **Si detecta datos sensibles, bloquea la respuesta**
+    # 🔹 Si recibe datos personales
     elif any(word in incoming_msg for word in ["dni", "dirección", "edad", "correo", "tarjeta"]):
         msg.body("⚠️ Por seguridad, no podemos procesar datos personales por WhatsApp. Llámanos para más información.")
 
-    # 📌 **Si proporcionan los datos para agendar cita**
-    elif any(char.isdigit() for char in incoming_msg) and len(incoming_msg.split()) > 3:
-        partes = incoming_msg.split()
-        nombre = " ".join(partes[:-2])
-        telefono = partes[-2]
-        servicio = partes[-1]
-        confirmacion = agendar_cita(nombre, telefono, servicio)
-        msg.body(confirmacion)
-
-    # 📌 **Consulta general a OpenAI**
+    # 🔹 Respuesta de OpenAI
     else:
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": f"Hola, soy Gabriel, el asistente virtual de {NOMBRE_CLINICA}. No menciono precios en WhatsApp. Estoy aquí para ayudarte con información sobre Medicina Estética Facial y Odontología."},
-                    {"role": "user", "content": incoming_msg}
-                ]
-            )
-            respuesta_ia = response["choices"][0]["message"]["content"].strip()
-            msg.body(respuesta_ia)
-
-        except openai.error.OpenAIError as e:
-            print(f"⚠️ Error con OpenAI: {e}")
-            msg.body("❌ Error de sistema. Intenta más tarde.")
-
-    logging.debug(f"📤 Respuesta enviada a Twilio: {str(resp)}")
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood."}, {"role": "user", "content": incoming_msg}]
+        )
+        msg.body(response["choices"][0]["message"]["content"].strip())
 
     return Response(str(resp), status=200, mimetype="application/xml")
 
