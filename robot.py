@@ -5,6 +5,11 @@ import os
 import requests
 import logging
 import re
+from datetime import datetime, timedelta
+import locale
+
+# Configuración de idioma para manejo de fechas
+locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
 
 app = Flask(__name__)
 
@@ -58,6 +63,38 @@ def verificar_disponibilidad():
     except requests.exceptions.RequestException as e:
         logging.error(f"❌ Error en la conexión con Koibox: {e}")
         return None
+
+# 📌 Función para convertir fechas relativas en fechas exactas
+def convertir_fecha(texto):
+    hoy = datetime.today()
+    dias_semana = {
+        "lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3,
+        "viernes": 4, "sábado": 5, "domingo": 6
+    }
+
+    # Caso: "el próximo lunes"
+    match = re.search(r"próximo (\w+)", texto.lower())
+    if match:
+        dia_solicitado = match.group(1)
+        if dia_solicitado in dias_semana:
+            hoy_dia = hoy.weekday()
+            diferencia = (dias_semana[dia_solicitado] - hoy_dia + 7) % 7
+            if diferencia == 0:
+                diferencia = 7
+            fecha_resultado = hoy + timedelta(days=diferencia)
+            return fecha_resultado.strftime("%d/%m/%Y")
+
+    # Caso: "mañana"
+    if "mañana" in texto.lower():
+        fecha_resultado = hoy + timedelta(days=1)
+        return fecha_resultado.strftime("%d/%m/%Y")
+
+    # Caso: "pasado mañana"
+    if "pasado mañana" in texto.lower():
+        fecha_resultado = hoy + timedelta(days=2)
+        return fecha_resultado.strftime("%d/%m/%Y")
+
+    return None  # Si no se puede identificar, retorna None
 
 # 📌 Función para agendar una cita en Koibox
 def agendar_cita(nombre, telefono, servicio, fecha):
@@ -119,14 +156,14 @@ def whatsapp_reply():
 
     # 📌 Intentar detectar y agendar la cita automáticamente
     else:
-        # Expresión regular para detectar datos de cita en el mensaje
-        patron = re.search(r"([a-zA-Z\s]+)\s(\d{9})\s([\w\s]+)\s(\d{1,2}/\d{1,2}/\d{4} \d{2}:\d{2})", incoming_msg)
-        
+        patron = re.search(r"([a-zA-Z\s]+)\s(\d{9})\s([\w\s]+)\s([\w\s]+)", incoming_msg)
+
         if patron:
             nombre = patron.group(1).title()
             telefono = patron.group(2)
             servicio = patron.group(3).title()
-            fecha = patron.group(4)
+            fecha_texto = patron.group(4)
+            fecha = convertir_fecha(fecha_texto) or fecha_texto  # Convertir fechas relativas
 
             confirmacion = agendar_cita(nombre, telefono, servicio, fecha)
             msg.body(confirmacion)
@@ -136,7 +173,7 @@ def whatsapp_reply():
                 response = openai.ChatCompletion.create(
                     model="gpt-4o",
                     messages=[
-                        {"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood. Solo agendas citas si se proporcionan nombre, teléfono, servicio y fecha."},
+                        {"role": "system", "content": "Eres el asistente Gabriel de Sonrisas Hollywood."},
                         {"role": "user", "content": incoming_msg}
                     ]
                 )
