@@ -11,52 +11,40 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 # API Keys desde Environment Variables en Render
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")  
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Configurada en Render
+KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")  # Asegúrate de configurarla en Render
 
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📌 Datos de la clínica Sonrisas Hollywood
-DIRECCION_CLINICA = "Calle Colón 48, Valencia, España"
-MAPS_LINK = "https://g.co/kgs/Y1h3Tb9"  # Enlace real de Google Maps
-TELEFONO_CLINICA = "+34 618 44 93 32"
-HORARIO_ATENCION = "Lunes a Viernes: 10:00 - 20:00 | Sábados: 10:00 - 14:00"
-PERFIL_GOOGLE = "https://g.co/kgs/Y1h3Tb9"  # Perfil real en Google
+# 📌 **Información de la clínica**
+NOMBRE_CLINICA = "Sonrisas Hollywood"
+UBICACION_CLINICA = "Calle Colón 48, Valencia"
+GOOGLE_MAPS_LINK = "https://g.co/kgs/Y1h3Tb9"
 
-# 📌 Mensaje de bienvenida de Gabriel
-MENSAJE_BIENVENIDA = f"""Hola, soy *Gabriel*, tu asistente en *Sonrisas Hollywood* ✨.
-Mi misión es ayudarte a encontrar el tratamiento perfecto para ti y asegurarme de que tengas una experiencia excepcional con nosotros.
-
-📍 *Ubicación:* {DIRECCION_CLINICA}  
-📅 *Horario:* {HORARIO_ATENCION}  
-📞 *Teléfono:* {TELEFONO_CLINICA}  
-📍 *Google Maps:* {MAPS_LINK}  
-🔎 *Perfil de Google:* {PERFIL_GOOGLE}  
-
-¿Cómo puedo ayudarte hoy?"""
-
-# 📌 Promociones actuales (sin precios)
+# 📌 **Ofertas actuales** (sin precios)
 OFERTAS_CLINICA = [
-    "✨ Blanqueamiento dental con tecnología avanzada.",
-    "💎 Diseño de sonrisa personalizado.",
-    "🌿 Tratamientos de estética facial para rejuvenecer tu piel.",
-    "📢 Consulta gratuita en ciertos tratamientos. ¡Pregunta por disponibilidad!"
+    "Descuento en tratamientos de blanqueamiento dental.",
+    "Promoción especial en diseño de sonrisa.",
+    "Consulta gratuita para nuevos pacientes en Medicina Estética Facial.",
 ]
 
-# 📌 Función para verificar disponibilidad en Koibox
+# 📌 **Función para verificar disponibilidad en Koibox**
 def verificar_disponibilidad():
     url = "https://api.koibox.es/v1/agenda/disponibilidad"
     headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
-    response = requests.get(url, headers=headers)
 
-    if response.status_code == 200:
-        disponibilidad = response.json()
-        return disponibilidad
-    else:
+    try:
+        response = requests.get(url, headers=headers, verify=False)  # Desactiva verificación SSL
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error en la API de Koibox: {e}")
         return None
 
-# 📌 Función para agendar una cita en Koibox
+# 📌 **Función para agendar una cita en Koibox**
 def agendar_cita(nombre, telefono, servicio):
     url = "https://api.koibox.es/v1/agenda/citas"
     headers = {
@@ -68,14 +56,18 @@ def agendar_cita(nombre, telefono, servicio):
         "telefono": telefono,
         "servicio": servicio,
     }
-    response = requests.post(url, json=datos, headers=headers)
 
-    if response.status_code == 201:
-        return "✅ Cita agendada con éxito. Te esperamos en Sonrisas Hollywood."
-    else:
-        return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
+    try:
+        response = requests.post(url, json=datos, headers=headers, verify=False)  # Desactiva verificación SSL
+        if response.status_code == 201:
+            return f"✅ Cita agendada con éxito en {NOMBRE_CLINICA}. Te esperamos en {UBICACION_CLINICA}."
+        else:
+            return "❌ Hubo un problema al agendar la cita. Intenta más tarde."
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error en la API de Koibox: {e}")
+        return "❌ No se pudo conectar con el sistema de citas. Intenta más tarde."
 
-# 📌 Webhook para recibir mensajes de WhatsApp
+# 📌 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def whatsapp_reply():
     logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
@@ -92,20 +84,16 @@ def whatsapp_reply():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # 📌 Mensaje de bienvenida y presentación
-    if incoming_msg in ["hola", "buenos días", "buenas tardes", "gabriel"]:
-        msg.body(MENSAJE_BIENVENIDA)
+    # 📌 **Si preguntan por la ubicación**
+    if "dónde están" in incoming_msg or "ubicación" in incoming_msg:
+        msg.body(f"📍 Estamos en {UBICACION_CLINICA}. Puedes encontrarnos en Google Maps aquí: {GOOGLE_MAPS_LINK}")
 
-    # 📌 Si preguntan "¿Dónde están?" o "Ubicación"
-    elif "dónde están" in incoming_msg or "ubicación" in incoming_msg or "google" in incoming_msg:
-        msg.body(f"📍 Nuestra clínica está en {DIRECCION_CLINICA}.\n🔎 Encuéntranos en Google aquí: {PERFIL_GOOGLE}\n📍 Google Maps: {MAPS_LINK}")
-
-    # 📌 Si pregunta por ofertas
+    # 📌 **Si preguntan por ofertas**
     elif "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas_msg = "\n".join(OFERTAS_CLINICA)
-        msg.body(f"📢 ¡Promociones de Sonrisas Hollywood!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
+        msg.body(f"📢 ¡Promociones de {NOMBRE_CLINICA}!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
 
-    # 📌 Si pregunta por disponibilidad
+    # 📌 **Si preguntan por disponibilidad**
     elif "disponible" in incoming_msg or "agenda" in incoming_msg:
         disponibilidad = verificar_disponibilidad()
         if disponibilidad:
@@ -113,35 +101,30 @@ def whatsapp_reply():
         else:
             msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
 
-    # 📌 Si pide agendar cita
+    # 📌 **Si piden agendar una cita**
     elif "cita" in incoming_msg:
         msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas")
 
-    # 📌 Si el paciente envía sus datos, agendar cita
-    elif incoming_msg.startswith("nombre:") and "teléfono:" in incoming_msg and "servicio:" in incoming_msg:
-        datos = incoming_msg.replace("nombre:", "").replace("teléfono:", "").replace("servicio:", "").split(",")
-        if len(datos) == 3:
-            nombre, telefono, servicio = datos
-            resultado_cita = agendar_cita(nombre.strip(), telefono.strip(), servicio.strip())
-            msg.body(resultado_cita)
-        else:
-            msg.body("⚠️ No pude procesar los datos. Por favor envíalos en el formato correcto.")
-
-    # 📌 Si la IA recibe un mensaje con datos personales, no los procesa
+    # 📌 **Si detecta datos sensibles, bloquea la respuesta**
     elif any(word in incoming_msg for word in ["dni", "dirección", "edad", "correo", "tarjeta"]):
         msg.body("⚠️ Por seguridad, no podemos procesar datos personales por WhatsApp. Llámanos para más información.")
 
-    # 📌 Seguimiento y motivación después de una cita
-    elif "seguimiento" in incoming_msg or "cómo va mi tratamiento" in incoming_msg:
-        msg.body("😊 ¡Gracias por confiar en Sonrisas Hollywood! ¿Cómo te sientes después de tu tratamiento? Si tienes alguna pregunta, estoy aquí para ayudarte.")
+    # 📌 **Si proporcionan los datos para agendar cita**
+    elif any(char.isdigit() for char in incoming_msg) and len(incoming_msg.split()) > 3:
+        partes = incoming_msg.split()
+        nombre = " ".join(partes[:-2])
+        telefono = partes[-2]
+        servicio = partes[-1]
+        confirmacion = agendar_cita(nombre, telefono, servicio)
+        msg.body(confirmacion)
 
-    # 📌 Consulta general a OpenAI
+    # 📌 **Consulta general a OpenAI**
     else:
         try:
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. No menciones precios en WhatsApp. Tu objetivo es ayudar a los pacientes a agendar citas y resolver dudas."},
+                    {"role": "system", "content": f"Hola, soy Gabriel, el asistente virtual de {NOMBRE_CLINICA}. No menciono precios en WhatsApp. Estoy aquí para ayudarte con información sobre Medicina Estética Facial y Odontología."},
                     {"role": "user", "content": incoming_msg}
                 ]
             )
