@@ -6,10 +6,7 @@ import requests
 import logging
 import re
 from datetime import datetime, timedelta
-import locale
-
-# Configuración de idioma para manejo de fechas
-locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
+import calendar
 
 app = Flask(__name__)
 
@@ -23,6 +20,12 @@ KOIBOX_PASSWORD = os.getenv("KOIBOX_PASSWORD")
 
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
+
+# Diccionario para traducción de días
+DAYS_ES = {
+    "monday": "lunes", "tuesday": "martes", "wednesday": "miércoles",
+    "thursday": "jueves", "friday": "viernes", "saturday": "sábado", "sunday": "domingo"
+}
 
 # 📌 Función para autenticar en Koibox y obtener un token
 def obtener_token_koibox():
@@ -67,18 +70,15 @@ def verificar_disponibilidad():
 # 📌 Función para convertir fechas relativas en fechas exactas
 def convertir_fecha(texto):
     hoy = datetime.today()
-    dias_semana = {
-        "lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3,
-        "viernes": 4, "sábado": 5, "domingo": 6
-    }
+    dias_semana = {v: k for k, v in DAYS_ES.items()}
 
     # Caso: "el próximo lunes"
     match = re.search(r"próximo (\w+)", texto.lower())
     if match:
         dia_solicitado = match.group(1)
         if dia_solicitado in dias_semana:
-            hoy_dia = hoy.weekday()
-            diferencia = (dias_semana[dia_solicitado] - hoy_dia + 7) % 7
+            dia_ingresado = list(dias_semana.keys()).index(dia_solicitado)
+            diferencia = (dia_ingresado - hoy.weekday() + 7) % 7
             if diferencia == 0:
                 diferencia = 7
             fecha_resultado = hoy + timedelta(days=diferencia)
