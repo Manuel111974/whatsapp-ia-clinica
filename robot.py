@@ -27,25 +27,32 @@ OFERTAS_CLINICA = [
 # 📌 Ubicación fija de la clínica
 UBICACION_CLINICA = "📍 Sonrisas Hollywood está en Calle Colón 48, Valencia.\nGoogle Maps: https://g.co/kgs/Y1h3Tb9"
 
-# 📌 Función para consultar disponibilidad en Koibox
+# 📌 Función para consultar disponibilidad en Koibox (CORREGIDA)
 def verificar_disponibilidad():
     url = "https://api.koibox.es/v1/agenda/disponibilidad"
     headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
 
     try:
-        response = requests.get(url, headers=headers, verify=False)  # Omitir verificación SSL
+        response = requests.get(url, headers=headers, verify=False, allow_redirects=True)  # Se sigue la redirección
 
         if response.status_code == 200:
             disponibilidad = response.json()
-            return disponibilidad
+            if disponibilidad:
+                return "📅 Hay disponibilidad en la agenda. ¿Te gustaría agendar una cita?"
+            else:
+                return "❌ No hay citas disponibles en este momento. Intenta más tarde."
+
+        elif response.status_code == 404:
+            return "⚠️ Error: No se encontró la API de disponibilidad en Koibox."
+
         else:
-            return None
+            return f"⚠️ Error en la API de Koibox ({response.status_code}). Intenta más tarde."
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"❌ Error al consultar Koibox: {e}")
-        return None
+        logging.error(f"❌ Error al conectar con Koibox: {e}")
+        return "⚠️ Hubo un problema al verificar la disponibilidad. Intenta más tarde."
 
-# 📌 Función para agendar una cita en Koibox
+# 📌 Función para agendar una cita en Koibox (CORREGIDA)
 def agendar_cita(nombre, telefono, servicio, fecha):
     url = "https://api.koibox.es/v1/agenda/citas"
     headers = {
@@ -60,12 +67,16 @@ def agendar_cita(nombre, telefono, servicio, fecha):
     }
     
     try:
-        response = requests.post(url, json=datos, headers=headers, verify=False)  # Omitir verificación SSL
+        response = requests.post(url, json=datos, headers=headers, verify=False, allow_redirects=True)  # Se sigue la redirección
 
         if response.status_code == 201:
             return f"✅ Cita confirmada para {nombre} el {fecha}. ¡Te esperamos en Sonrisas Hollywood! {UBICACION_CLINICA}"
+
+        elif response.status_code == 404:
+            return "⚠️ No se pudo agendar la cita porque el servicio no fue encontrado en Koibox."
+
         else:
-            return f"❌ Error {response.status_code} en Koibox: {response.text}"
+            return f"❌ Error en Koibox ({response.status_code}): {response.text}"
 
     except requests.exceptions.RequestException as e:
         return f"⚠️ Error al conectar con Koibox: {str(e)}"
@@ -94,11 +105,8 @@ def whatsapp_reply():
 
     # 📌 Si pregunta por disponibilidad
     elif "disponible" in incoming_msg or "agenda" in incoming_msg:
-        disponibilidad = verificar_disponibilidad()
-        if disponibilidad:
-            msg.body("📅 Hay disponibilidad en la agenda. ¿Te gustaría agendar una cita?")
-        else:
-            msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
+        disponibilidad_msg = verificar_disponibilidad()
+        msg.body(disponibilidad_msg)
 
     # 📌 Si pide la ubicación
     elif "dónde están" in incoming_msg or "ubicación" in incoming_msg:
