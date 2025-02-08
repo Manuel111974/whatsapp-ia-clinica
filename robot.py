@@ -11,20 +11,40 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 # API Keys desde Environment Variables en Render
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Configurar en Render
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")  # Configurar en Render
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  
+KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")  
 
 # Configurar OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# 📌 Ofertas actuales de Sonrisas Hollywood (SIN precios)
+# 📌 Datos de la clínica Sonrisas Hollywood
+DIRECCION_CLINICA = "Calle Colón 48, Valencia, España"
+MAPS_LINK = "https://g.co/kgs/Y1h3Tb9"  # Enlace real de Google Maps
+TELEFONO_CLINICA = "+34 618 44 93 32"
+HORARIO_ATENCION = "Lunes a Viernes: 10:00 - 20:00 | Sábados: 10:00 - 14:00"
+PERFIL_GOOGLE = "https://g.co/kgs/Y1h3Tb9"  # Perfil real en Google
+
+# 📌 Mensaje de bienvenida de Gabriel
+MENSAJE_BIENVENIDA = f"""Hola, soy *Gabriel*, tu asistente en *Sonrisas Hollywood* ✨.
+Mi misión es ayudarte a encontrar el tratamiento perfecto para ti y asegurarme de que tengas una experiencia excepcional con nosotros.
+
+📍 *Ubicación:* {DIRECCION_CLINICA}  
+📅 *Horario:* {HORARIO_ATENCION}  
+📞 *Teléfono:* {TELEFONO_CLINICA}  
+📍 *Google Maps:* {MAPS_LINK}  
+🔎 *Perfil de Google:* {PERFIL_GOOGLE}  
+
+¿Cómo puedo ayudarte hoy?"""
+
+# 📌 Promociones actuales (sin precios)
 OFERTAS_CLINICA = [
-    "🎉 Descuento en tratamientos de blanqueamiento dental.",
-    "🌟 Promoción especial en diseño de sonrisa.",
-    "💆 Consulta gratuita para nuevos pacientes en estética facial.",
+    "✨ Blanqueamiento dental con tecnología avanzada.",
+    "💎 Diseño de sonrisa personalizado.",
+    "🌿 Tratamientos de estética facial para rejuvenecer tu piel.",
+    "📢 Consulta gratuita en ciertos tratamientos. ¡Pregunta por disponibilidad!"
 ]
 
-# 📌 Función para consultar disponibilidad en Koibox
+# 📌 Función para verificar disponibilidad en Koibox
 def verificar_disponibilidad():
     url = "https://api.koibox.es/v1/agenda/disponibilidad"
     headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
@@ -72,8 +92,16 @@ def whatsapp_reply():
     resp = MessagingResponse()
     msg = resp.message()
 
+    # 📌 Mensaje de bienvenida y presentación
+    if incoming_msg in ["hola", "buenos días", "buenas tardes", "gabriel"]:
+        msg.body(MENSAJE_BIENVENIDA)
+
+    # 📌 Si preguntan "¿Dónde están?" o "Ubicación"
+    elif "dónde están" in incoming_msg or "ubicación" in incoming_msg or "google" in incoming_msg:
+        msg.body(f"📍 Nuestra clínica está en {DIRECCION_CLINICA}.\n🔎 Encuéntranos en Google aquí: {PERFIL_GOOGLE}\n📍 Google Maps: {MAPS_LINK}")
+
     # 📌 Si pregunta por ofertas
-    if "oferta" in incoming_msg or "promoción" in incoming_msg:
+    elif "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas_msg = "\n".join(OFERTAS_CLINICA)
         msg.body(f"📢 ¡Promociones de Sonrisas Hollywood!\n{ofertas_msg}\n📅 ¿Quieres agendar una cita?")
 
@@ -89,9 +117,23 @@ def whatsapp_reply():
     elif "cita" in incoming_msg:
         msg.body("😊 Para agendar tu cita dime: \n\n1️⃣ Tu nombre completo \n2️⃣ Tu teléfono \n3️⃣ El servicio que deseas")
 
+    # 📌 Si el paciente envía sus datos, agendar cita
+    elif incoming_msg.startswith("nombre:") and "teléfono:" in incoming_msg and "servicio:" in incoming_msg:
+        datos = incoming_msg.replace("nombre:", "").replace("teléfono:", "").replace("servicio:", "").split(",")
+        if len(datos) == 3:
+            nombre, telefono, servicio = datos
+            resultado_cita = agendar_cita(nombre.strip(), telefono.strip(), servicio.strip())
+            msg.body(resultado_cita)
+        else:
+            msg.body("⚠️ No pude procesar los datos. Por favor envíalos en el formato correcto.")
+
     # 📌 Si la IA recibe un mensaje con datos personales, no los procesa
     elif any(word in incoming_msg for word in ["dni", "dirección", "edad", "correo", "tarjeta"]):
         msg.body("⚠️ Por seguridad, no podemos procesar datos personales por WhatsApp. Llámanos para más información.")
+
+    # 📌 Seguimiento y motivación después de una cita
+    elif "seguimiento" in incoming_msg or "cómo va mi tratamiento" in incoming_msg:
+        msg.body("😊 ¡Gracias por confiar en Sonrisas Hollywood! ¿Cómo te sientes después de tu tratamiento? Si tienes alguna pregunta, estoy aquí para ayudarte.")
 
     # 📌 Consulta general a OpenAI
     else:
@@ -99,7 +141,7 @@ def whatsapp_reply():
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "Eres el asistente de Sonrisas Hollywood. No menciones precios en WhatsApp."},
+                    {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. No menciones precios en WhatsApp. Tu objetivo es ayudar a los pacientes a agendar citas y resolver dudas."},
                     {"role": "user", "content": incoming_msg}
                 ]
             )
