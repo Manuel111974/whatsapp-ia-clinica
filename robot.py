@@ -1,155 +1,91 @@
-from flask import Flask, request, Response
-from twilio.twiml.messaging_response import MessagingResponse
-import openai
-import os
+import redis
 import requests
-import logging
-from langdetect import detect
-import dateparser
+import json
+from flask import Flask, request
 
+# 🔗 Configuración de Redis (memoria para Gabriel)
+REDIS_URL = "redis://TU_URL_DE_RENDER"  # ⚠️ Sustituir con la URL de Redis en Render
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+# 🔗 Configuración de Koibox (para reservas)
+KOIBOX_API_URL = "https://tu-api-koibox.render.com"  # ⚠️ Sustituir con la URL de tu API de Koibox
+KOIBOX_API_KEY = "TU_API_KEY"  # ⚠️ Sustituir con tu API Key de Koibox
+
+# 📌 Funciones para guardar y recuperar datos en Redis
+def guardar_dato(usuario, clave, valor):
+    redis_client.set(f"{usuario}:{clave}", valor)
+
+def obtener_dato(usuario, clave):
+    return redis_client.get(f"{usuario}:{clave}")
+
+# 📌 Función para reservar citas en Koibox
+def reservar_cita(user_id, fecha, hora, servicio):
+    nombre = obtener_dato(user_id, "nombre")
+    telefono = obtener_dato(user_id, "telefono")
+
+    if not nombre or not telefono:
+        return "Necesito tu nombre y teléfono para reservar la cita. ¿Puedes enviármelo?"
+
+    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}", "Content-Type": "application/json"}
+    data = {
+        "nombre": nombre,
+        "telefono": telefono,
+        "fecha": fecha,
+        "hora": hora,
+        "servicio": servicio
+    }
+    response = requests.post(f"{KOIBOX_API_URL}/reservar", headers=headers, data=json.dumps(data))
+    
+    if response.status_code == 200:
+        return f"¡Cita confirmada para {nombre}! 📅 {fecha} a las {hora}. Nos vemos en Calle Colón 48. 😊"
+    else:
+        return "Lo siento, hubo un problema al reservar. ¿Puedes intentarlo de nuevo?"
+
+# 🚀 Crear API con Flask
 app = Flask(__name__)
 
-# Configuración de logs
-logging.basicConfig(level=logging.DEBUG)
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    user_id = request.form['WaId']  # WhatsApp ID del usuario
+    message = request.form['Body'].lower()  # Mensaje recibido
 
-# API Keys
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
+    # 💡 Si el usuario dice "Soy Manuel", Gabriel guarda su nombre
+    if "soy" in message:
+        nombre = message.split("soy")[-1].strip()
+        guardar_dato(user_id, "nombre", nombre)
+        return f"¡Encantado, {nombre}! 😊 ¿Cómo puedo ayudarte hoy?"
 
-openai.api_key = OPENAI_API_KEY
+    # 💡 Si el usuario dice "Mi teléfono es 123456789", Gabriel guarda el número
+    if "mi teléfono es" in message:
+        telefono = message.split("es")[-1].strip()
+        guardar_dato(user_id, "telefono", telefono)
+        return f"¡Gracias! Guardé tu número como {telefono}. ¿Quieres reservar una cita?"
 
-# 📍 **Ubicación fija**
-DIRECCION_CLINICA = "Calle Colón 48, Valencia, España"
-LINK_GOOGLE_MAPS = "https://g.co/kgs/Y1h3Tb9"
+    # 💡 Si el usuario pregunta por una cita
+    if "quiero una cita" in message or "reserva" in message:
+        palabras = message.split()
+        fecha, hora, servicio = None, None, None
 
-# 💰 **Precios actualizados**
-PRECIOS = {
-    "carillas composite": "2.500 € por arcada o 4.500 € por ambas arcadas.",
-    "botox": "Desde 7 € por unidad.",
-    "ácido hialurónico": "Desde 350 € por vial."
-}
+        for i, palabra in enumerate(palabras):
+            if palabra in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
+                fecha = palabra
+            if ":" in palabra:
+                hora = palabra
+            if "botox" in palabra:
+                servicio = "botox"
+            if "diseño" in palabra or "carillas" in palabra:
+                servicio = "diseño de sonrisa"
 
-# 🛠 **Memoria de conversación**
-conversaciones = {}
-
-# 📌 **Consulta disponibilidad en Koibox**
-def verificar_disponibilidad():
-    url = "https://api.koibox.cloud/agenda/disponibilidad"
-    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
-    response = requests.get(url, headers=headers, verify=False)
-
-    if response.status_code == 200:
-        return response.json()
-    return None
-
-# 📌 **Agendar cita en Koibox**
-def agendar_cita(nombre, telefono, servicio, fecha):
-    url = "https://api.koibox.cloud/agenda/citas"
-    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}", "Content-Type": "application/json"}
-    datos = {"nombre": nombre, "telefono": telefono, "servicio": servicio, "fecha": fecha}
-    response = requests.post(url, json=datos, headers=headers, verify=False)
-
-    if response.status_code == 201:
-        return f"✅ Cita confirmada para {nombre} el {fecha} para {servicio}. Te esperamos en {DIRECCION_CLINICA}."
-    return "❌ No se pudo agendar la cita. Inténtalo más tarde."
-
-# 📌 **Webhook para WhatsApp**
-@app.route("/webhook", methods=["POST"])
-def whatsapp_reply():
-    logging.debug(f"🔍 Petición recibida de Twilio: {request.form}")
-
-    incoming_msg = request.form.get("Body", "").strip().lower()
-    sender_number = request.form.get("From")
-
-    if not incoming_msg:
-        return Response("<Response><Message>No se recibió mensaje.</Message></Response>", status=200, mimetype="application/xml")
-
-    print(f"📩 Mensaje recibido de {sender_number}: {incoming_msg}")
-
-    if sender_number not in conversaciones:
-        conversaciones[sender_number] = {}
-
-    resp = MessagingResponse()
-    msg = resp.message()
-
-    # 📌 **Detección automática de idioma**
-    try:
-        lang = detect(incoming_msg)
-        if lang not in ["es", "en", "fr", "pt"]:
-            lang = "es"
-    except:
-        lang = "es"
-
-    # 📍 **Ubicación de la clínica**
-    if any(word in incoming_msg for word in ["dónde estáis", "ubicación", "dirección"]):
-        msg.body(f"📍 Estamos en {DIRECCION_CLINICA}. Aquí tienes nuestra ubicación en Google Maps: {LINK_GOOGLE_MAPS}")
-
-    # 💰 **Consulta de precios**
-    elif "cuánto cuesta" in incoming_msg or "precio" in incoming_msg:
-        for tratamiento, precio in PRECIOS.items():
-            if tratamiento in incoming_msg:
-                msg.body(f"💰 El precio de {tratamiento} es {precio}. ¿Quieres agendar una cita?")
-                break
+        if fecha and hora and servicio:
+            return reservar_cita(user_id, fecha, hora, servicio)
         else:
-            msg.body("💰 Indícame qué tratamiento deseas saber el precio y te lo diré.")
+            return "Para reservar necesito fecha, hora y el tratamiento. ¿Me lo puedes decir?"
 
-    # 📅 **Disponibilidad en agenda**
-    elif "disponible" in incoming_msg or "agenda" in incoming_msg:
-        disponibilidad = verificar_disponibilidad()
-        if disponibilidad:
-            msg.body("📅 Hay disponibilidad en la agenda. ¿Quieres agendar una cita?")
-        else:
-            msg.body("❌ No hay disponibilidad en este momento. Intenta más tarde.")
+    # 💡 Si el usuario pregunta por dirección
+    if "dónde estáis" in message or "ubicación" in message:
+        return "Nos encontramos en Calle Colón 48, Valencia. 📍 https://goo.gl/maps/aquílalocalización"
 
-    # 📝 **Registro de datos para cita**
-    elif "cita" in incoming_msg or "reservar" in incoming_msg:
-        msg.body("😊 Para agendar tu cita dime:\n\n1️⃣ Tu nombre completo\n2️⃣ Tu teléfono\n3️⃣ El servicio que deseas\n4️⃣ La fecha y hora deseada")
+    return "¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte hoy? 😊"
 
-    elif any(word in incoming_msg for word in ["botox", "relleno", "ácido hialurónico", "carillas", "implante"]):
-        conversaciones[sender_number]["servicio"] = incoming_msg
-        msg.body("📅 ¿Para qué fecha y hora deseas la cita?")
-
-    elif any(word in incoming_msg for word in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]):
-        fecha_procesada = dateparser.parse(incoming_msg)
-        if fecha_procesada:
-            conversaciones[sender_number]["fecha"] = fecha_procesada.strftime("%Y-%m-%d %H:%M")
-            msg.body("✅ ¡Fecha registrada! Ahora dime tu nombre y número de contacto.")
-
-    elif sender_number in conversaciones and "servicio" in conversaciones[sender_number] and "fecha" in conversaciones[sender_number]:
-        partes = incoming_msg.split(" ")
-        if len(partes) >= 2:
-            nombre = partes[0] + " " + partes[1]
-            telefono = partes[-1]
-
-            servicio = conversaciones[sender_number]["servicio"]
-            fecha = conversaciones[sender_number]["fecha"]
-
-            resultado = agendar_cita(nombre, telefono, servicio, fecha)
-            msg.body(resultado)
-            del conversaciones[sender_number]
-
-        else:
-            msg.body("❌ No he podido procesar tu nombre y teléfono. Intenta de nuevo.")
-
-    # 📌 **Consulta general a OpenAI**
-    else:
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": f"Eres Gabriel, el asistente de Sonrisas Hollywood. Responde en {lang}."},
-                    {"role": "user", "content": incoming_msg}
-                ]
-            )
-            respuesta_ia = response["choices"][0]["message"]["content"].strip()
-            msg.body(respuesta_ia)
-
-        except openai.error.OpenAIError as e:
-            print(f"⚠️ Error con OpenAI: {e}")
-            msg.body("❌ Error de sistema. Intenta más tarde.")
-
-    return Response(str(resp), status=200, mimetype="application/xml")
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=True)
