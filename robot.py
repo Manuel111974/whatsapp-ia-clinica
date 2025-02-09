@@ -20,9 +20,17 @@ def obtener_disponibilidad():
     headers = {"X-Koibox-Key": KOIBOX_API_KEY}  # Cabecera correcta de autenticación
     try:
         response = requests.get(f"{KOIBOX_URL}/agenda/", headers=headers)
+
+        # Verificar si la respuesta es exitosa
         if response.status_code == 200:
             citas = response.json()
-            return citas[:5]  # Devolvemos las 5 primeras citas disponibles
+            
+            # Verificar si la respuesta es una lista antes de acceder a ella
+            if isinstance(citas, list) and len(citas) > 0:
+                return citas[:5]  # Tomar solo las primeras 5 citas disponibles
+            else:
+                print("La API no devolvió una lista de citas válidas.")
+                return None
         else:
             print(f"Error al obtener citas: {response.status_code} - {response.text}")
             return None
@@ -30,7 +38,7 @@ def obtener_disponibilidad():
         print(f"Error en Koibox: {e}")
         return None
 
-# Función para crear una cita
+# Función para crear una cita en Koibox
 def crear_cita(cliente, fecha, hora_inicio, hora_fin, servicio_id):
     headers = {
         "X-Koibox-Key": KOIBOX_API_KEY,
@@ -54,11 +62,6 @@ def crear_cita(cliente, fecha, hora_inicio, hora_fin, servicio_id):
     except Exception as e:
         print(f"Error en Koibox: {e}")
         return None
-
-# Ruta principal
-@app.route("/")
-def home():
-    return "Gabriel está activo y funcionando correctamente."
 
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -89,7 +92,7 @@ def webhook():
         if citas:
             respuesta = "Estas son las próximas citas disponibles:\n"
             for c in citas:
-                respuesta += f"📅 {c['fecha']} a las {c['hora_inicio']}\n"
+                respuesta += f"📅 {c.get('fecha', 'Fecha desconocida')} a las {c.get('hora_inicio', 'Hora desconocida')}\n"
             respuesta += "Por favor, responde con la fecha y hora que prefieras."
         else:
             respuesta = "No se encontraron citas disponibles en este momento. ¿Quieres que te avisemos cuando haya disponibilidad?"
