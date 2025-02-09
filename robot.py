@@ -25,9 +25,9 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CENTRO EN KOIBOX**
-KOIBOX_USER_ID = "1234"  # Usuario que agenda la cita (obligatorio)
-KOIBOX_SERVICIO_ID = 10  # ⚠️ Cambia esto al ID real de un servicio disponible en tu centro
+# ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CONFIGURACIÓN EN KOIBOX**
+KOIBOX_USER_ID = "Gabriel"  # Usuario que agenda la cita
+KOIBOX_SERVICIO_ID = 5  # ⚠️ ID del servicio "Primera Visita" (ajústalo según Koibox)
 
 # Función para formatear la fecha a YYYY-MM-DD
 def formatear_fecha(fecha_texto):
@@ -77,7 +77,7 @@ def crear_cliente(nombre, telefono):
         return None
 
 # Función para crear una cita en Koibox
-def crear_cita(cliente_id, fecha, hora):
+def crear_cita(cliente_id, fecha, hora, observaciones):
     hora_fin = calcular_hora_fin(hora)
 
     if not hora_fin:
@@ -90,7 +90,7 @@ def crear_cita(cliente_id, fecha, hora):
         "hora_fin": hora_fin,
         "servicios": [KOIBOX_SERVICIO_ID],  
         "user": KOIBOX_USER_ID,  
-        "notas": "Cita agendada por Gabriel (IA)"
+        "notas": f"Interesado en: {observaciones} - Cita agendada por Gabriel (IA)"
     }
 
     print(f"📩 Enviando datos a Koibox: {datos_cita}")  # DEBUG
@@ -141,19 +141,24 @@ def webhook():
 
     elif estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_observaciones", ex=600)
+        respuesta = "Para personalizar mejor tu visita, dime qué tratamiento te interesa (Ejemplo: 'Botox, diseño de sonrisa, ortodoncia') 😊."
+
+    elif estado_usuario == "esperando_observaciones":
+        redis_client.set(sender + "_observaciones", incoming_msg, ex=600)
 
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
+        observaciones = redis_client.get(sender + "_observaciones")
 
         cliente_id = buscar_cliente(telefono)
-
         if not cliente_id:
             cliente_id = crear_cliente(nombre, telefono)
 
         if cliente_id:
-            exito, mensaje = crear_cita(cliente_id, fecha, hora)
+            exito, mensaje = crear_cita(cliente_id, fecha, hora, observaciones)
             respuesta = mensaje
         else:
             respuesta = "⚠️ No se pudo crear el cliente en Koibox."
