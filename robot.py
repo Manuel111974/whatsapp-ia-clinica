@@ -1,9 +1,8 @@
 import os
 import redis
-import requests
 import openai
+import requests
 from flask import Flask, request
-from datetime import datetime, timedelta
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
@@ -13,99 +12,101 @@ app = Flask(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI
+# Configuración de OpenAI (GPT-4)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Configuración de Koibox API
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
-KOIBOX_URL = "https://api.koibox.cloud/api"
+# Configuración de Airtable
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")  
+AIRTABLE_BASE_ID = "appLzlE5aJOuFkSZb"  
+AIRTABLE_TABLE_ID = "tblhdHTMAwFxBxJly"  
 
-HEADERS = {
-    "X-Koibox-Key": KOIBOX_API_KEY,
+# URL de la API de Airtable
+AIRTABLE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}"
+
+# Headers de autenticación para Airtable
+AIRTABLE_HEADERS = {
+    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
 
-# ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CONFIGURACIÓN EN KOIBOX**
-KOIBOX_USER_ID = 10  # ⚠️ ID numérico de Gabriel en Koibox
-KOIBOX_SERVICIO_ID = 15  # ⚠️ ID real del servicio "Primera Visita"
+# IDs de los campos en Airtable
+FIELDS = {
+    "nombre": "fldcnZz38hH0Ggqaj",
+    "telefono": "fldNjWFRNcriIDMqf",
+    "fecha": "fldfoFgZZ9a5V37cq",
+    "hora": "fldEXJh063AXZ7IDw",
+    "interes": "fldLAUkuJ6dUe1BH4",
+    "estado": "fld311mg19eXxHWr",
+    "notas": "fldB9uItP4dhQDnCu"
+}
 
-# Función para formatear la fecha a YYYY-MM-DD
-def formatear_fecha(fecha_texto):
-    try:
-        fecha_obj = datetime.strptime(fecha_texto, "%d/%m/%Y")
-        return fecha_obj.strftime("%Y-%m-%d")
-    except ValueError:
-        return None
+# Función para verificar si el cliente ya está registrado en Airtable
+def buscar_cliente_telefono(telefono):
+    url = f"{AIRTABLE_URL}?filterByFormula=({FIELDS['telefono']}='{telefono}')"
+    response = requests.get(url, headers=AIRTABLE_HEADERS)
 
-# Función para calcular la hora de fin (+1 hora por defecto)
-def calcular_hora_fin(hora_inicio):
-    try:
-        hora_obj = datetime.strptime(hora_inicio, "%H:%M")
-        hora_fin = hora_obj + timedelta(hours=1)  # Duración de 1 hora
-        return hora_fin.strftime("%H:%M")
-    except ValueError:
-        return None
+    if response.status_code == 200:
+        records = response.json().get("records", [])
+        if records:
+            return records[0]["id"]  # Devuelve el ID del cliente si existe
+    return None  # Cliente no encontrado
 
-# Función para buscar un cliente en Koibox por teléfono
-def buscar_cliente(telefono):
-    try:
-        response = requests.get(f"{KOIBOX_URL}/clientes/?telefono={telefono}", headers=HEADERS)
-        if response.status_code == 200:
-            clientes = response.json()
-            if clientes and len(clientes) > 0:
-                return clientes[0]["id"]  # Devuelve el ID del cliente si existe
-        return None
-    except Exception as e:
-        print(f"❌ Error buscando cliente en Koibox: {e}")
-        return None
-
-# Función para crear un cliente en Koibox
-def crear_cliente(nombre, telefono):
+# Función para registrar un nuevo cliente en Airtable
+def registrar_cliente_airtable(nombre, telefono):
     datos_cliente = {
-        "nombre": nombre,
-        "movil": telefono
+        "records": [
+            {
+                "fields": {
+                    FIELDS["nombre"]: nombre,
+                    FIELDS["telefono"]: telefono
+                }
+            }
+        ]
     }
-    try:
-        response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-        if response.status_code == 201:
-            return response.json()["id"]  # Devuelve el ID del cliente creado
-        else:
-            print(f"⚠️ No se pudo crear el cliente: {response.text}")
-            return None
-    except Exception as e:
-        print(f"❌ Error creando cliente en Koibox: {e}")
-        return None
+    response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cliente)
+    
+    if response.status_code in [200, 201]:
+        return response.json()["records"][0]["id"]  # Devuelve el ID del cliente
+    return None
 
-# Función para crear una cita en Koibox
-def crear_cita(cliente_id, fecha, hora, observaciones):
-    hora_fin = calcular_hora_fin(hora)
+# Función para registrar cita en Airtable
+def registrar_cita_airtable(nombre, telefono, fecha, hora, interes):
+    cliente_id = buscar_cliente_telefono(telefono)
 
-    if not hora_fin:
-        return False, "⚠️ Error en el formato de la hora."
+    if not cliente_id:  # Si el cliente no existe, lo registramos primero
+        cliente_id = registrar_cliente_airtable(nombre, telefono)
+        if not cliente_id:
+            return False, "⚠️ No se pudo registrar al paciente en Airtable."
 
     datos_cita = {
-        "cliente": cliente_id,  
-        "fecha": fecha,
-        "hora_inicio": hora,
-        "hora_fin": hora_fin,
-        "servicios": [KOIBOX_SERVICIO_ID],  
-        "user": KOIBOX_USER_ID,  
-        "notas": f"Interesado en: {observaciones} - Cita agendada por Gabriel (IA)"
+        "records": [
+            {
+                "fields": {
+                    FIELDS["nombre"]: [cliente_id],  # Relaciona la cita con el cliente
+                    FIELDS["fecha"]: fecha,  
+                    FIELDS["hora"]: hora,  
+                    FIELDS["interes"]: interes,  
+                    FIELDS["estado"]: "Programada",  
+                    FIELDS["notas"]: f"Interesado en {interes} - Agendado por Gabriel (IA)"
+                }
+            }
+        ]
     }
+    response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cita)
+    
+    if response.status_code in [200, 201]:
+        return True, "✅ Tu cita ha sido registrada en nuestra agenda."
+    return False, f"⚠️ No se pudo registrar la cita: {response.text}"
 
-    print(f"📩 Enviando datos a Koibox: {datos_cita}")  # DEBUG
-
-    try:
-        response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-        print(f"📩 Respuesta de Koibox: {response.status_code} - {response.text}")  # DEBUG
-
-        if response.status_code == 201:
-            return True, "✅ ¡Tu cita ha sido creada con éxito! Te esperamos en la clínica."
-        else:
-            return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-    except Exception as e:
-        print(f"❌ Error en Koibox: {e}")
-        return False, f"Error en Koibox: {e}"
+# Función para obtener respuesta de OpenAI (GPT-4)
+def obtener_respuesta_ia(mensaje):
+    prompt = f"Paciente: {mensaje}\nGabriel:"
+    respuesta = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "system", "content": prompt}],
+        max_tokens=150
+    )
+    return respuesta["choices"][0]["message"]["content"]
 
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -113,58 +114,43 @@ def webhook():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
 
-    # Inicializar respuesta predeterminada
-    respuesta = "🤖 No entendí tu mensaje. ¿Podrías reformularlo?"
-
-    # Inicializar respuesta de Twilio
     resp = MessagingResponse()
     msg = resp.message()
 
-    # Obtener historial del usuario en Redis
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
     if estado_usuario == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        respuesta = f"Gracias, {incoming_msg} 😊. Ahora dime tu número de teléfono 📞."
+        respuesta = f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞."
 
     elif estado_usuario == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! Ahora dime qué fecha prefieres para la cita (Ejemplo: '12/02/2025') 📅."
+        respuesta = "¡Perfecto! Ahora dime qué fecha prefieres (Ejemplo: '12/02/2025') 📅."
 
     elif estado_usuario == "esperando_fecha":
-        fecha_formateada = formatear_fecha(incoming_msg)
-        if fecha_formateada:
-            redis_client.set(sender + "_fecha", fecha_formateada, ex=600)
-            redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-            respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
-        else:
-            respuesta = "⚠️ El formato de la fecha no es válido. Escríbelo como 'DD/MM/YYYY'."
+        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
 
     elif estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_observaciones", ex=600)
-        respuesta = "Para personalizar mejor tu visita, dime qué tratamiento te interesa (Ejemplo: 'Botox, diseño de sonrisa, ortodoncia') 😊."
+        redis_client.set(sender + "_estado", "esperando_interes", ex=600)
+        respuesta = "¿Qué tratamiento te interesa? (Ejemplo: 'Botox, diseño de sonrisa, ortodoncia') 😊."
 
-    elif estado_usuario == "esperando_observaciones":
-        redis_client.set(sender + "_observaciones", incoming_msg, ex=600)
-
+    elif estado_usuario == "esperando_interes":
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
-        observaciones = redis_client.get(sender + "_observaciones")
+        interes = incoming_msg
 
-        cliente_id = buscar_cliente(telefono)
-        if not cliente_id:
-            cliente_id = crear_cliente(nombre, telefono)
+        exito, mensaje = registrar_cita_airtable(nombre, telefono, fecha, hora, interes)
+        respuesta = mensaje
 
-        if cliente_id:
-            exito, mensaje = crear_cita(cliente_id, fecha, hora, observaciones)
-            respuesta = mensaje
-        else:
-            respuesta = "⚠️ No se pudo crear el cliente en Koibox."
+    else:
+        respuesta = obtener_respuesta_ia(incoming_msg)
 
     msg.body(respuesta)
     return str(resp)
