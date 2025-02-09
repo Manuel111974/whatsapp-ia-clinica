@@ -3,6 +3,7 @@ import redis
 import requests
 import openai
 from flask import Flask, request
+from datetime import datetime, timedelta
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
@@ -24,35 +25,39 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Función para obtener disponibilidad de citas en Koibox
-def obtener_disponibilidad():
+# Función para formatear la fecha a YYYY-MM-DD
+def formatear_fecha(fecha_texto):
     try:
-        response = requests.get(f"{KOIBOX_URL}/agenda/", headers=HEADERS)
-        if response.status_code == 200:
-            citas = response.json()
-            if isinstance(citas, list) and len(citas) > 0:
-                return citas[:5]  
-            else:
-                return None
-        else:
-            print(f"Error en Koibox: {response.text}")
-            return None
-    except Exception as e:
-        print(f"Error en Koibox: {e}")
+        fecha_obj = datetime.strptime(fecha_texto, "%d/%m/%Y")
+        return fecha_obj.strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+# Función para calcular la hora de fin (+1 hora por defecto)
+def calcular_hora_fin(hora_inicio):
+    try:
+        hora_obj = datetime.strptime(hora_inicio, "%H:%M")
+        hora_fin = hora_obj + timedelta(hours=1)  # Duración de 1 hora
+        return hora_fin.strftime("%H:%M")
+    except ValueError:
         return None
 
 # Función para crear una cita en Koibox
-def crear_cita(nombre, telefono, fecha, hora, servicio_id=1):
+def crear_cita(cliente_id, fecha, hora):
+    hora_fin = calcular_hora_fin(hora)
+
+    if not hora_fin:
+        return False, "⚠️ Error en el formato de la hora."
+
     datos_cita = {
-        "cliente": {
-            "nombre": nombre,
-            "movil": telefono
-        },
+        "cliente": cliente_id,  # Solo el ID, no un dict
         "fecha": fecha,
         "hora_inicio": hora,
-        "servicios": [{"id": servicio_id}],
+        "hora_fin": hora_fin,
+        "servicios": [1],  # Asignar ID del servicio (ajústalo según Koibox)
         "notas": "Cita agendada por Gabriel (IA)"
     }
+
     print(f"📩 Enviando datos a Koibox: {datos_cita}")  # DEBUG
 
     try:
@@ -92,9 +97,13 @@ def webhook():
         respuesta = "¡Perfecto! Ahora dime qué fecha prefieres para la cita (Ejemplo: '12/02/2025') 📅."
 
     elif estado_usuario == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
+        fecha_formateada = formatear_fecha(incoming_msg)
+        if fecha_formateada:
+            redis_client.set(sender + "_fecha", fecha_formateada, ex=600)
+            redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+            respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
+        else:
+            respuesta = "⚠️ El formato de la fecha no es válido. Escríbelo como 'DD/MM/YYYY'."
 
     elif estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
@@ -108,7 +117,10 @@ def webhook():
         print(f"🔍 Datos obtenidos antes de enviar a Koibox: {nombre}, {telefono}, {fecha}, {hora}")  # DEBUG
 
         if nombre and telefono and fecha and hora:
-            exito, mensaje = crear_cita(nombre, telefono, fecha, hora, servicio_id=1)
+            # Simulamos que el cliente ID es el teléfono (esto debe ajustarse según Koibox)
+            cliente_id = telefono  
+            
+            exito, mensaje = crear_cita(cliente_id, fecha, hora)
             respuesta = mensaje
 
             # Limpiar Redis
@@ -126,14 +138,8 @@ def webhook():
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
-    # RESPUESTAS RÁPIDAS Y OPENAI PARA CONSULTAS GENERALES
-    elif "precio" in incoming_msg or "coste" in incoming_msg:
-        respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. ¿Quieres que te agende una cita de valoración gratuita? 😊"
-
-    elif "botox" in incoming_msg:
-        respuesta = "El tratamiento con Botox Vistabel está a 7€/unidad 💉. ¿Quieres reservar una consulta gratuita? 😊"
-
-    elif "ubicación" in incoming_msg or "dónde están" in incoming_msg:
+    # RESPUESTAS RÁPIDAS
+    elif "ubicación" in incoming_msg:
         respuesta = "📍 Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos!"
 
     elif "gracias" in incoming_msg:
