@@ -53,13 +53,18 @@ def crear_cita(nombre, telefono, fecha, hora, servicio_id=1):
         "servicios": [{"id": servicio_id}],
         "notas": "Cita agendada por Gabriel (IA)"
     }
+    print(f"📩 Enviando datos a Koibox: {datos_cita}")  # DEBUG
+
     try:
         response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
+        print(f"📩 Respuesta de Koibox: {response.status_code} - {response.text}")  # DEBUG
+
         if response.status_code == 201:
             return True, "✅ ¡Tu cita ha sido creada con éxito! Te esperamos en la clínica."
         else:
             return False, f"⚠️ No se pudo agendar la cita: {response.text}"
     except Exception as e:
+        print(f"Error en Koibox: {e}")
         return False, f"Error en Koibox: {e}"
 
 # Webhook para recibir mensajes de WhatsApp
@@ -99,6 +104,8 @@ def webhook():
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
+
+        print(f"🔍 Datos obtenidos antes de enviar a Koibox: {nombre}, {telefono}, {fecha}, {hora}")  # DEBUG
 
         if nombre and telefono and fecha and hora:
             exito, mensaje = crear_cita(nombre, telefono, fecha, hora, servicio_id=1)
