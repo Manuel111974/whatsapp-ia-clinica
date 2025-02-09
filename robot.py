@@ -8,7 +8,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis (Para recordar la conversación)
+# Configuración de Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -48,7 +48,9 @@ def buscar_cliente_telefono(telefono):
     if response.status_code == 200:
         records = response.json().get("records", [])
         if records:
+            print(f"🔍 Cliente encontrado en Airtable: {records[0]['id']}")
             return records[0]["id"]  # Devuelve el ID del cliente si existe
+    print("⚠️ Cliente NO encontrado en Airtable")
     return None  # Cliente no encontrado
 
 # Función para registrar un nuevo cliente en Airtable
@@ -63,8 +65,11 @@ def registrar_cliente_airtable(nombre, telefono):
             }
         ]
     }
+    print(f"📩 Enviando datos a Airtable para registrar cliente: {datos_cliente}")
     response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cliente)
     
+    print(f"📩 Respuesta de Airtable al registrar cliente: {response.status_code} - {response.text}")
+
     if response.status_code in [200, 201]:
         return response.json()["records"][0]["id"]  # Devuelve el ID del cliente
     return None
@@ -76,13 +81,14 @@ def registrar_cita_airtable(nombre, telefono, fecha, hora, interes):
     if not cliente_id:  # Si el cliente no existe, lo registramos primero
         cliente_id = registrar_cliente_airtable(nombre, telefono)
         if not cliente_id:
+            print("❌ Error: No se pudo registrar al cliente en Airtable")
             return False, "⚠️ No se pudo registrar al paciente en Airtable."
 
     datos_cita = {
         "records": [
             {
                 "fields": {
-                    FIELDS["nombre"]: [cliente_id],  # Relaciona la cita con el cliente
+                    FIELDS["nombre"]: [cliente_id],  
                     FIELDS["fecha"]: fecha,  
                     FIELDS["hora"]: hora,  
                     FIELDS["interes"]: interes,  
@@ -92,32 +98,14 @@ def registrar_cita_airtable(nombre, telefono, fecha, hora, interes):
             }
         ]
     }
+    print(f"📩 Enviando datos a Airtable para registrar cita: {datos_cita}")
     response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cita)
-    
+
+    print(f"📩 Respuesta de Airtable al registrar cita: {response.status_code} - {response.text}")
+
     if response.status_code in [200, 201]:
         return True, "✅ Tu cita ha sido registrada en nuestra agenda."
     return False, f"⚠️ No se pudo registrar la cita: {response.text}"
-
-# Función para obtener respuesta de OpenAI (GPT-4) con tono corporativo
-def obtener_respuesta_ia(mensaje):
-    prompt = f"""
-    Eres Gabriel, el asistente virtual de Sonrisas Hollywood y Albane Clinic. 
-    Tu misión es responder de manera profesional, clara y concisa. 
-    Proporciona información sobre tratamientos dentales, estética facial y promociones.
-    
-    Si el usuario pregunta sobre tratamientos, responde con detalles.
-    Si el usuario pregunta por precios, da una respuesta transparente con las tarifas actuales.
-    Si el usuario quiere agendar una cita, guía el proceso de manera amigable.
-
-    Usuario: {mensaje}
-    Gabriel:
-    """
-    respuesta = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
-        max_tokens=150
-    )
-    return respuesta["choices"][0]["message"]["content"]
 
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -161,12 +149,14 @@ def webhook():
         hora = redis_client.get(sender + "_hora")
         interes = incoming_msg
 
+        print(f"🔍 Datos obtenidos antes de enviar a Airtable: {nombre}, {telefono}, {fecha}, {hora}, {interes}")
+
         exito, mensaje = registrar_cita_airtable(nombre, telefono, fecha, hora, interes)
         respuesta = mensaje
         redis_client.delete(sender + "_estado")
 
     else:
-        respuesta = obtener_respuesta_ia(incoming_msg)
+        respuesta = "No entendí tu mensaje. ¿Podrías reformularlo? 😊"
 
     msg.body(respuesta)
     return str(resp)
