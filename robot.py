@@ -41,21 +41,26 @@ def obtener_disponibilidad():
         print(f"Error en Koibox: {e}")
         return None
 
-# Función para generar respuestas con OpenAI GPT-4
-def generar_respuesta(contexto):
+# Función para crear una cita en Koibox
+def crear_cita(nombre, telefono, fecha, hora, servicio_id=1):
+    datos_cita = {
+        "cliente": {
+            "nombre": nombre,
+            "movil": telefono
+        },
+        "fecha": fecha,
+        "hora_inicio": hora,
+        "servicios": [{"id": servicio_id}],
+        "notas": "Cita agendada por Gabriel (IA)"
+    }
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente virtual de Sonrisas Hollywood, una clínica de odontología estética en Valencia. Responde de manera cálida, profesional y natural."},
-                {"role": "user", "content": contexto}
-            ],
-            max_tokens=150
-        )
-        return response["choices"][0]["message"]["content"].strip()
+        response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
+        if response.status_code == 201:
+            return True, "✅ ¡Tu cita ha sido creada con éxito! Te esperamos en la clínica."
+        else:
+            return False, f"⚠️ No se pudo agendar la cita: {response.text}"
     except Exception as e:
-        print(f"Error en OpenAI: {e}")
-        return "Lo siento, no puedo responder en este momento."
+        return False, f"Error en Koibox: {e}"
 
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -68,27 +73,58 @@ def webhook():
     msg = resp.message()
 
     # Obtener historial del usuario en Redis
-    historial = redis_client.get(sender) or ""
-    historial += f"\nUsuario: {incoming_msg}"
-
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # Lógica de conversación con OpenAI
-    if "cita" in incoming_msg or "agenda" in incoming_msg:
-        citas = obtener_disponibilidad()
-        if citas:
-            respuesta = "Aquí tienes las próximas citas disponibles 📅:\n"
-            for c in citas:
-                respuesta += f"📍 {c['fecha']} a las {c['hora_inicio']}\n"
-            respuesta += "Dime cuál prefieres y te la reservo 😊."
-        else:
-            respuesta = "Ahora mismo no tenemos citas disponibles, pero dime qué día prefieres y te avisaré en cuanto haya un hueco 📆."
+    # FLUJO DE CITAS PASO A PASO
+    if estado_usuario == "esperando_nombre":
+        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
+        respuesta = f"Gracias, {incoming_msg} 😊. Ahora dime tu número de teléfono 📞."
 
+    elif estado_usuario == "esperando_telefono":
+        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        respuesta = "¡Perfecto! Ahora dime qué fecha prefieres para la cita (Ejemplo: '12/02/2025') 📅."
+
+    elif estado_usuario == "esperando_fecha":
+        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
+
+    elif estado_usuario == "esperando_hora":
+        redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        
+        # Obtener datos almacenados en Redis
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+
+        if nombre and telefono and fecha and hora:
+            exito, mensaje = crear_cita(nombre, telefono, fecha, hora, servicio_id=1)
+            respuesta = mensaje
+
+            # Limpiar Redis
+            redis_client.delete(sender + "_estado")
+            redis_client.delete(sender + "_nombre")
+            redis_client.delete(sender + "_telefono")
+            redis_client.delete(sender + "_fecha")
+            redis_client.delete(sender + "_hora")
+        else:
+            respuesta = "❌ Hubo un error con los datos. Vamos a intentarlo de nuevo. ¿Cómo te llamas? 😊"
+            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+
+    # INICIO DEL FLUJO DE CITAS
+    elif "cita" in incoming_msg or "quiero reservar" in incoming_msg:
+        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+        respuesta = "¡Genial! Primero dime tu nombre completo 😊."
+
+    # RESPUESTAS RÁPIDAS Y OPENAI PARA CONSULTAS GENERALES
     elif "precio" in incoming_msg or "coste" in incoming_msg:
         respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. ¿Quieres que te agende una cita de valoración gratuita? 😊"
 
     elif "botox" in incoming_msg:
-        respuesta = "El tratamiento con Botox Vistabel está a 7€/unidad 💉. ¿Quieres una consulta para personalizar el tratamiento? 😊"
+        respuesta = "El tratamiento con Botox Vistabel está a 7€/unidad 💉. ¿Quieres reservar una consulta gratuita? 😊"
 
     elif "ubicación" in incoming_msg or "dónde están" in incoming_msg:
         respuesta = "📍 Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos!"
@@ -97,13 +133,7 @@ def webhook():
         respuesta = "¡De nada! 😊 Siempre aquí para ayudarte."
 
     else:
-        # Gabriel usa OpenAI para responder preguntas generales de manera natural
-        contexto = f"Usuario: {incoming_msg}\nHistorial de conversación:\n{historial}"
-        respuesta = generar_respuesta(contexto)
-
-    # Guardar contexto en Redis
-    historial += f"\nGabriel: {respuesta}"
-    redis_client.set(sender, historial, ex=3600)
+        respuesta = "No estoy seguro de haber entendido. ¿Puedes reformularlo? 😊"
 
     msg.body(respuesta)
     return str(resp)
