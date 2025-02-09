@@ -1,86 +1,68 @@
 import os
 import redis
-import requests
 from flask import Flask, request, jsonify
-from twilio.twiml.messaging_response import MessagingResponse
 
-# Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+# Cargar Redis desde las variables de entorno
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    raise ValueError("❌ ERROR: La variable REDIS_URL no está configurada.")
 
-# Configuración de Koibox API
-KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
-KOIBOX_URL = "https://api.koibox.cloud/v1"
+# Conectar con Redis
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-# Función para conectar con Koibox y obtener disponibilidad de citas
-def obtener_disponibilidad():
-    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
-    try:
-        response = requests.get(f"{KOIBOX_URL}/appointments", headers=headers)
-        if response.status_code == 200:
-            citas = response.json()
-            return citas[:5]  # Devolvemos las 5 primeras citas disponibles
-        else:
-            return None
-    except Exception as e:
-        print(f"Error en Koibox: {e}")
-        return None
-
-# Ruta principal
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-    return "Gabriel está activo y funcionando correctamente."
+    return "🤖 Gabriel, el asistente de Sonrisas Hollywood, está funcionando."
 
-# Webhook para recibir mensajes de WhatsApp
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
-    sender = request.values.get("From", "")
+@app.route("/set_memory", methods=["POST"])
+def set_memory():
+    """ Guarda un valor en Redis. """
+    try:
+        data = request.json
+        key = data.get("key")
+        value = data.get("value")
 
-    # Inicializar respuesta de Twilio
-    resp = MessagingResponse()
-    msg = resp.message()
+        if not key or not value:
+            return jsonify({"error": "Clave y valor requeridos"}), 400
 
-    # Manejo de memoria en Redis
-    historial = redis_client.get(sender) or ""
-    historial += f"\nUsuario: {incoming_msg}"
+        redis_client.set(key, value)
+        return jsonify({"message": f"✅ Se guardó {key} en memoria"}), 200
 
-    # Lógica de respuesta
-    if "hola" in incoming_msg:
-        respuesta = "¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. ¿Cómo puedo ayudarte hoy?"
-    
-    elif "precio" in incoming_msg or "coste" in incoming_msg:
-        respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. ¿Te gustaría agendar una cita de valoración gratuita?"
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    elif "botox" in incoming_msg:
-        respuesta = "Actualmente tenemos una oferta en Botox con Vistabel a 7€/unidad. ¿Quieres más información?"
-
-    elif "cita" in incoming_msg or "agenda" in incoming_msg:
-        citas = obtener_disponibilidad()
-        if citas:
-            respuesta = "Estas son las próximas citas disponibles:\n"
-            for c in citas:
-                respuesta += f"📅 {c['date']} a las {c['time']}\n"
-            respuesta += "Por favor, responde con la fecha y hora que prefieras."
+@app.route("/get_memory/<key>", methods=["GET"])
+def get_memory(key):
+    """ Recupera un valor de Redis. """
+    try:
+        value = redis_client.get(key)
+        if value:
+            return jsonify({"key": key, "value": value}), 200
         else:
-            respuesta = "No se encontraron citas disponibles en este momento. ¿Quieres que te avisemos cuando haya disponibilidad?"
+            return jsonify({"error": "❌ Clave no encontrada"}), 404
 
-    elif "ubicación" in incoming_msg or "dónde están" in incoming_msg:
-        respuesta = "Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos! 📍"
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    else:
-        respuesta = "No entendí tu mensaje. ¿Podrías reformularlo? 😊"
+@app.route("/delete_memory/<key>", methods=["DELETE"])
+def delete_memory(key):
+    """ Elimina un valor de Redis. """
+    try:
+        redis_client.delete(key)
+        return jsonify({"message": f"✅ Se eliminó {key} de memoria"}), 200
 
-    # Guardar contexto en Redis
-    historial += f"\nGabriel: {respuesta}"
-    redis_client.set(sender, historial, ex=3600)  # Expira en 1 hora
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    msg.body(respuesta)
-    return str(resp)
+# Prueba de conexión a Redis al iniciar el servidor
+try:
+    print("🔄 Probando conexión a Redis...")
+    print("PONG" if redis_client.ping() else "❌ No se pudo conectar")
+    print("✅ Conexión exitosa a Redis")
+except redis.exceptions.ConnectionError as e:
+    print(f"❌ Error de conexión a Redis: {e}")
 
-# Iniciar aplicación Flask
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
