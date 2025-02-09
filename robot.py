@@ -1,37 +1,50 @@
+from flask import Flask, request, jsonify
 import os
 import redis
-from flask import Flask, request, jsonify
+import logging
+
+# Configuración de logging para ver lo que ocurre en los logs de Render
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Cargar Redis desde las variables de entorno
-REDIS_URL = os.getenv("REDIS_URL")
-if not REDIS_URL:
-    raise ValueError("❌ ERROR: La variable REDIS_URL no está configurada.")
+# 📌 Conectar con Redis usando la URL de entorno en Render
+redis_url = os.getenv("REDIS_URL")
+if not redis_url:
+    logging.error("⚠️ ERROR: REDIS_URL no está configurada en las variables de entorno.")
+    exit(1)
 
-# Conectar con Redis
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+try:
+    redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    redis_client.ping()  # Prueba de conexión
+    logging.info("✅ Conexión exitosa a Redis.")
+except redis.exceptions.ConnectionError:
+    logging.error("❌ ERROR: No se pudo conectar a Redis.")
+    exit(1)
 
-@app.route("/", methods=["GET"])
+@app.route('/')
 def home():
-    return "🤖 Gabriel, el asistente de Sonrisas Hollywood, está funcionando."
+    return "🚀 WhatsApp Bot activo y funcionando en Render."
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    """ Endpoint para recibir mensajes de Twilio """
-    try:
-        data = request.form  # Twilio envía datos en formato `form-data`
-        message_body = data.get("Body", "").strip()
-        sender = data.get("From", "")
-        
-        # Guardar mensaje en Redis
-        redis_client.set(f"msg:{sender}", message_body)
-        
-        response = f"📩 Recibido: {message_body}"
-        return jsonify({"message": response}), 200
+    """ Recibe mensajes de WhatsApp desde Twilio y los guarda en Redis """
+    data = request.json
+    if not data:
+        logging.warning("⚠️ Petición vacía recibida en /webhook")
+        return jsonify({"error": "No hay datos en la solicitud"}), 400
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    sender = data.get('From', 'desconocido')
+    message = data.get('Body', '').strip()
 
-if __name__ == "__main__":
+    logging.info(f"📩 Mensaje recibido de {sender}: {message}")
+
+    # 📌 Guardar en Redis
+    redis_client.set(sender, message)
+
+    # 📌 Responder automáticamente
+    respuesta = f"Hola, {sender}. Recibí tu mensaje: '{message}'"
+    return jsonify({"status": "ok", "reply": respuesta}), 200
+
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8080)
