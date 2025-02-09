@@ -6,50 +6,49 @@ import logging
 from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 
-# Configuración de logging
+# Configuración de logging para depuración
 logging.basicConfig(level=logging.INFO)
 
-# Configuración de Flask
+# Inicialización de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis para almacenar conversaciones
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # Configuración de OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
-# Configuración de Koibox API
+# Configuración de Koibox API para gestionar citas
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/v1"
 
-
 def obtener_disponibilidad():
-    """Obtiene disponibilidad de citas desde Koibox"""
+    """Obtiene disponibilidad de citas desde Koibox."""
     headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
     try:
         response = requests.get(f"{KOIBOX_URL}/appointments", headers=headers)
         if response.status_code == 200:
             citas = response.json()
-            return citas[:5]  # Devolvemos las 5 primeras citas disponibles
+            return citas[:5]  # Muestra las 5 primeras citas disponibles
         else:
             return None
     except Exception as e:
-        logging.error(f"Error en Koibox: {e}")
+        logging.error(f"❌ Error en Koibox: {e}")
         return None
 
-
 def generar_respuesta(mensaje, historial):
-    """Genera una respuesta con OpenAI usando el historial de la conversación"""
+    """Genera una respuesta usando OpenAI basada en el historial de la conversación."""
     prompt = f"""
-    Eres Gabriel, el asistente virtual de Sonrisas Hollywood.
-    Responde de forma amable, clara y profesional.
+    Eres Gabriel, el asistente de Sonrisas Hollywood. Debes responder de manera profesional, amable y útil.
 
     Historial de conversación:
     {historial}
 
     Usuario: {mensaje}
-    Gabriel:"""
+    Gabriel:
+    """
 
     try:
         respuesta = openai.ChatCompletion.create(
@@ -59,18 +58,16 @@ def generar_respuesta(mensaje, historial):
         )
         return respuesta["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        logging.error(f"Error con OpenAI: {e}")
-        return "Lo siento, parece que hubo un error al procesar tu mensaje. ¿Podrías intentarlo de nuevo?"
-
+        logging.error(f"❌ Error con OpenAI: {e}")
+        return "Lo siento, ha habido un error al procesar tu mensaje. ¿Puedes intentarlo de nuevo?"
 
 @app.route("/")
 def home():
     return "Gabriel está activo y funcionando correctamente."
 
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Maneja mensajes de WhatsApp y responde con IA y Koibox"""
+    """Maneja mensajes de WhatsApp y responde usando IA, memoria y Koibox."""
     if not request.values:
         logging.warning("⚠️ Petición vacía recibida en /webhook")
         return "Petición inválida", 400
@@ -80,10 +77,10 @@ def webhook():
 
     logging.info(f"📩 Mensaje recibido de {sender}: {message}")
 
-    # Recuperar historial de conversación
+    # Recuperar historial de conversación del usuario
     historial = redis_client.get(sender) or ""
 
-    # Lógica para preguntas específicas antes de enviar a OpenAI
+    # **🚀 Lógica de respuestas**
     if "cita" in message or "agenda" in message:
         citas = obtener_disponibilidad()
         if citas:
@@ -104,19 +101,18 @@ def webhook():
         respuesta = "Actualmente tenemos una oferta en Botox con Vistabel a 7€/unidad. ¿Quieres más información?"
 
     else:
-        # Generar respuesta con OpenAI si no es una consulta específica
+        # **🎯 Respuesta Inteligente con OpenAI**
         respuesta = generar_respuesta(message, historial)
 
-    # Guardar contexto en Redis
+    # **💾 Guardar el historial de conversación en Redis**
     nuevo_historial = f"{historial}\nUsuario: {message}\nGabriel: {respuesta}"
     redis_client.set(sender, nuevo_historial, ex=3600)  # Expira en 1 hora
 
-    # Responder a WhatsApp
+    # **📩 Enviar respuesta a WhatsApp**
     response = MessagingResponse()
     response.message(respuesta)
 
     return str(response)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
