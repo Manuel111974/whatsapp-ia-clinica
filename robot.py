@@ -26,8 +26,8 @@ HEADERS = {
 }
 
 # ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CONFIGURACIÓN EN KOIBOX**
-KOIBOX_USER_ID = 10  # ⚠️ Reemplaza con el ID numérico real de Gabriel en Koibox
-KOIBOX_SERVICIO_ID = 15  # ⚠️ Asegúrate de poner el ID correcto del servicio "Primera Visita"
+KOIBOX_USER_ID = 10  # ⚠️ ID numérico real de Gabriel en Koibox
+KOIBOX_SERVICIO_ID = 15  # ⚠️ ID real del servicio "Primera Visita" en Koibox
 
 # Función para formatear la fecha a YYYY-MM-DD
 def formatear_fecha(fecha_texto):
@@ -90,7 +90,7 @@ def crear_cita(cliente_id, fecha, hora, observaciones):
         "hora_fin": hora_fin,
         "servicios": [KOIBOX_SERVICIO_ID],  
         "user": KOIBOX_USER_ID,  
-        "titulo": "Primera Visita",  # 🔹 Lo volvemos a enviar por si sigue pidiéndolo
+        "titulo": "Primera Visita",
         "notas": f"Interesado en: {observaciones} - Cita agendada por Gabriel (IA)"
     }
 
@@ -113,6 +113,9 @@ def crear_cita(cliente_id, fecha, hora, observaciones):
 def webhook():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
+
+    # Inicializar respuesta predeterminada
+    respuesta = "🤖 No entendí tu mensaje. ¿Podrías reformularlo?"
 
     # Inicializar respuesta de Twilio
     resp = MessagingResponse()
