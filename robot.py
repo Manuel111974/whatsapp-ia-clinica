@@ -25,6 +25,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CENTRO EN KOIBOX**
+KOIBOX_USER_ID = "1234"  # Usuario que agenda la cita (obligatorio)
+KOIBOX_SERVICIO_ID = 10  # ⚠️ Cambia esto al ID real de un servicio disponible en tu centro
+
 # Función para formatear la fecha a YYYY-MM-DD
 def formatear_fecha(fecha_texto):
     try:
@@ -42,6 +46,36 @@ def calcular_hora_fin(hora_inicio):
     except ValueError:
         return None
 
+# Función para buscar un cliente en Koibox por teléfono
+def buscar_cliente(telefono):
+    try:
+        response = requests.get(f"{KOIBOX_URL}/clientes/?telefono={telefono}", headers=HEADERS)
+        if response.status_code == 200:
+            clientes = response.json()
+            if clientes and len(clientes) > 0:
+                return clientes[0]["id"]  # Devuelve el ID del cliente si existe
+        return None
+    except Exception as e:
+        print(f"❌ Error buscando cliente en Koibox: {e}")
+        return None
+
+# Función para crear un cliente en Koibox
+def crear_cliente(nombre, telefono):
+    datos_cliente = {
+        "nombre": nombre,
+        "movil": telefono
+    }
+    try:
+        response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+        if response.status_code == 201:
+            return response.json()["id"]  # Devuelve el ID del cliente creado
+        else:
+            print(f"⚠️ No se pudo crear el cliente: {response.text}")
+            return None
+    except Exception as e:
+        print(f"❌ Error creando cliente en Koibox: {e}")
+        return None
+
 # Función para crear una cita en Koibox
 def crear_cita(cliente_id, fecha, hora):
     hora_fin = calcular_hora_fin(hora)
@@ -50,11 +84,12 @@ def crear_cita(cliente_id, fecha, hora):
         return False, "⚠️ Error en el formato de la hora."
 
     datos_cita = {
-        "cliente": cliente_id,  # Solo el ID, no un dict
+        "cliente": cliente_id,  
         "fecha": fecha,
         "hora_inicio": hora,
         "hora_fin": hora_fin,
-        "servicios": [1],  # Asignar ID del servicio (ajústalo según Koibox)
+        "servicios": [KOIBOX_SERVICIO_ID],  
+        "user": KOIBOX_USER_ID,  
         "notas": "Cita agendada por Gabriel (IA)"
     }
 
@@ -69,7 +104,7 @@ def crear_cita(cliente_id, fecha, hora):
         else:
             return False, f"⚠️ No se pudo agendar la cita: {response.text}"
     except Exception as e:
-        print(f"Error en Koibox: {e}")
+        print(f"❌ Error en Koibox: {e}")
         return False, f"Error en Koibox: {e}"
 
 # Webhook para recibir mensajes de WhatsApp
@@ -85,7 +120,6 @@ def webhook():
     # Obtener historial del usuario en Redis
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # FLUJO DE CITAS PASO A PASO
     if estado_usuario == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
@@ -107,55 +141,29 @@ def webhook():
 
     elif estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        
-        # Obtener datos almacenados en Redis
+
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
 
-        print(f"🔍 Datos obtenidos antes de enviar a Koibox: {nombre}, {telefono}, {fecha}, {hora}")  # DEBUG
+        cliente_id = buscar_cliente(telefono)
 
-        if nombre and telefono and fecha and hora:
-            # Simulamos que el cliente ID es el teléfono (esto debe ajustarse según Koibox)
-            cliente_id = telefono  
-            
+        if not cliente_id:
+            cliente_id = crear_cliente(nombre, telefono)
+
+        if cliente_id:
             exito, mensaje = crear_cita(cliente_id, fecha, hora)
             respuesta = mensaje
-
-            # Limpiar Redis
-            redis_client.delete(sender + "_estado")
-            redis_client.delete(sender + "_nombre")
-            redis_client.delete(sender + "_telefono")
-            redis_client.delete(sender + "_fecha")
-            redis_client.delete(sender + "_hora")
         else:
-            respuesta = "❌ Hubo un error con los datos. Vamos a intentarlo de nuevo. ¿Cómo te llamas? 😊"
-            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+            respuesta = "⚠️ No se pudo crear el cliente en Koibox."
 
-    # INICIO DEL FLUJO DE CITAS
-    elif "cita" in incoming_msg or "quiero reservar" in incoming_msg:
+    elif "cita" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
-
-    # RESPUESTAS RÁPIDAS
-    elif "ubicación" in incoming_msg:
-        respuesta = "📍 Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos!"
-
-    elif "gracias" in incoming_msg:
-        respuesta = "¡De nada! 😊 Siempre aquí para ayudarte."
-
-    else:
-        respuesta = "No estoy seguro de haber entendido. ¿Puedes reformularlo? 😊"
 
     msg.body(respuesta)
     return str(resp)
 
-# Ruta principal de salud del bot
-@app.route("/")
-def home():
-    return "✅ Gabriel está activo y funcionando correctamente."
-
-# Iniciar aplicación Flask con Gunicorn
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
