@@ -1,8 +1,8 @@
 import os
 import redis
 import requests
+import openai
 from flask import Flask, request
-from openai import OpenAI
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
@@ -12,9 +12,8 @@ app = Flask(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI GPT-4
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Configuración de OpenAI
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
@@ -36,7 +35,7 @@ def obtener_disponibilidad():
             else:
                 return None
         else:
-            print(f"Error Koibox: {response.text}")
+            print(f"Error en Koibox: {response.text}")
             return None
     except Exception as e:
         print(f"Error en Koibox: {e}")
@@ -45,15 +44,15 @@ def obtener_disponibilidad():
 # Función para generar respuestas con OpenAI GPT-4
 def generar_respuesta(contexto):
     try:
-        response = client.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4-turbo",
             messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente virtual de Sonrisas Hollywood, una clínica de odontología estética y medicina estética en Valencia. Responde de manera cálida, amigable y profesional, como un asistente humano real."},
+                {"role": "system", "content": "Eres Gabriel, el asistente virtual de Sonrisas Hollywood, una clínica de odontología estética en Valencia. Responde de manera cálida, profesional y natural."},
                 {"role": "user", "content": contexto}
             ],
             max_tokens=150
         )
-        return response.choices[0].message['content'].strip()
+        return response["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"Error en OpenAI: {e}")
         return "Lo siento, no puedo responder en este momento."
@@ -74,43 +73,8 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # Lógica de respuestas con IA
-    if estado_usuario == "esperando_datos":
-        datos = incoming_msg.split()
-        if len(datos) < 2:
-            respuesta = "Voy a necesitar tu nombre y tu número de teléfono para reservar la cita 😊. Ejemplo: 'María 666777888'."
-        else:
-            nombre = datos[0]
-            telefono = datos[1]
-            redis_client.set(sender + "_nombre", nombre, ex=600)
-            redis_client.set(sender + "_telefono", telefono, ex=600)
-            redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-            respuesta = f"¡Genial, {nombre}! Ahora dime qué fecha te viene mejor para la cita. Puedes escribirme algo como '10/02/2025' 📅."
-
-    elif estado_usuario == "esperando_fecha":
-        fecha = incoming_msg
-        redis_client.set(sender + "_fecha", fecha, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        respuesta = "Perfecto. ¿A qué hora te gustaría la cita? ⏰ Ejemplo: '16:00'."
-
-    elif estado_usuario == "esperando_hora":
-        hora = incoming_msg
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-
-        if not nombre or not telefono or not fecha:
-            respuesta = "❌ Algo salió mal con los datos. Vamos a intentarlo de nuevo. Dime tu nombre y teléfono."
-            redis_client.delete(sender + "_estado")
-        else:
-            exito, mensaje = crear_cita(nombre, telefono, fecha, hora, servicio_id=1)
-            respuesta = mensaje
-            redis_client.delete(sender + "_estado")
-            redis_client.delete(sender + "_nombre")
-            redis_client.delete(sender + "_telefono")
-            redis_client.delete(sender + "_fecha")
-
-    elif "cita" in incoming_msg or "agenda" in incoming_msg:
+    # Lógica de conversación con OpenAI
+    if "cita" in incoming_msg or "agenda" in incoming_msg:
         citas = obtener_disponibilidad()
         if citas:
             respuesta = "Aquí tienes las próximas citas disponibles 📅:\n"
@@ -118,22 +82,22 @@ def webhook():
                 respuesta += f"📍 {c['fecha']} a las {c['hora_inicio']}\n"
             respuesta += "Dime cuál prefieres y te la reservo 😊."
         else:
-            respuesta = "Ahora mismo no tenemos citas disponibles, pero dime qué día prefieres y te avisaré en cuanto tengamos un hueco 📆."
+            respuesta = "Ahora mismo no tenemos citas disponibles, pero dime qué día prefieres y te avisaré en cuanto haya un hueco 📆."
 
     elif "precio" in incoming_msg or "coste" in incoming_msg:
-        respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. Si quieres, te puedo agendar una cita de valoración gratuita. ¿Te interesa? 😊"
+        respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. ¿Quieres que te agende una cita de valoración gratuita? 😊"
 
     elif "botox" in incoming_msg:
-        respuesta = "El tratamiento con Botox Vistabel está a 7€/unidad 💉. Si quieres, podemos hacerte una valoración para personalizar el tratamiento. ¿Quieres reservar cita? 😊"
+        respuesta = "El tratamiento con Botox Vistabel está a 7€/unidad 💉. ¿Quieres una consulta para personalizar el tratamiento? 😊"
 
     elif "ubicación" in incoming_msg or "dónde están" in incoming_msg:
-        respuesta = "📍 Nuestra clínica está en Calle Colón 48, Valencia. ¡Ven a vernos cuando quieras!"
+        respuesta = "📍 Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos!"
 
     elif "gracias" in incoming_msg:
-        respuesta = "¡De nada! 😊 Siempre aquí para ayudarte. Si necesitas algo más, dime."
+        respuesta = "¡De nada! 😊 Siempre aquí para ayudarte."
 
     else:
-        # Gabriel usará OpenAI para responder preguntas generales de manera natural
+        # Gabriel usa OpenAI para responder preguntas generales de manera natural
         contexto = f"Usuario: {incoming_msg}\nHistorial de conversación:\n{historial}"
         respuesta = generar_respuesta(contexto)
 
@@ -144,6 +108,11 @@ def webhook():
     msg.body(respuesta)
     return str(resp)
 
-# Iniciar aplicación Flask
+# Ruta principal de salud del bot
+@app.route("/")
+def home():
+    return "✅ Gabriel está activo y funcionando correctamente."
+
+# Iniciar aplicación Flask con Gunicorn
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
