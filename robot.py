@@ -1,50 +1,86 @@
-from flask import Flask, request, jsonify
 import os
 import redis
-import logging
+import requests
+from flask import Flask, request, jsonify
+from twilio.twiml.messaging_response import MessagingResponse
 
-# Configuración de logging para ver lo que ocurre en los logs de Render
-logging.basicConfig(level=logging.INFO)
-
+# Configuración de Flask
 app = Flask(__name__)
 
-# 📌 Conectar con Redis usando la URL de entorno en Render
-redis_url = os.getenv("REDIS_URL")
-if not redis_url:
-    logging.error("⚠️ ERROR: REDIS_URL no está configurada en las variables de entorno.")
-    exit(1)
+# Configuración de Redis
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-try:
-    redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
-    redis_client.ping()  # Prueba de conexión
-    logging.info("✅ Conexión exitosa a Redis.")
-except redis.exceptions.ConnectionError:
-    logging.error("❌ ERROR: No se pudo conectar a Redis.")
-    exit(1)
+# Configuración de Koibox API
+KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
+KOIBOX_URL = "https://api.koibox.cloud/v1"
 
-@app.route('/')
+# Función para conectar con Koibox y obtener disponibilidad de citas
+def obtener_disponibilidad():
+    headers = {"Authorization": f"Bearer {KOIBOX_API_KEY}"}
+    try:
+        response = requests.get(f"{KOIBOX_URL}/appointments", headers=headers)
+        if response.status_code == 200:
+            citas = response.json()
+            return citas[:5]  # Devolvemos las 5 primeras citas disponibles
+        else:
+            return None
+    except Exception as e:
+        print(f"Error en Koibox: {e}")
+        return None
+
+# Ruta principal
+@app.route("/")
 def home():
-    return "🚀 WhatsApp Bot activo y funcionando en Render."
+    return "Gabriel está activo y funcionando correctamente."
 
-@app.route('/webhook', methods=['POST'])
+# Webhook para recibir mensajes de WhatsApp
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    """ Recibe mensajes de WhatsApp desde Twilio y los guarda en Redis """
-    data = request.json
-    if not data:
-        logging.warning("⚠️ Petición vacía recibida en /webhook")
-        return jsonify({"error": "No hay datos en la solicitud"}), 400
+    incoming_msg = request.values.get("Body", "").strip().lower()
+    sender = request.values.get("From", "")
 
-    sender = data.get('From', 'desconocido')
-    message = data.get('Body', '').strip()
+    # Inicializar respuesta de Twilio
+    resp = MessagingResponse()
+    msg = resp.message()
 
-    logging.info(f"📩 Mensaje recibido de {sender}: {message}")
+    # Manejo de memoria en Redis
+    historial = redis_client.get(sender) or ""
+    historial += f"\nUsuario: {incoming_msg}"
 
-    # 📌 Guardar en Redis
-    redis_client.set(sender, message)
+    # Lógica de respuesta
+    if "hola" in incoming_msg:
+        respuesta = "¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. ¿Cómo puedo ayudarte hoy?"
+    
+    elif "precio" in incoming_msg or "coste" in incoming_msg:
+        respuesta = "El diseño de sonrisa en composite tiene un precio medio de 2500€. ¿Te gustaría agendar una cita de valoración gratuita?"
 
-    # 📌 Responder automáticamente
-    respuesta = f"Hola, {sender}. Recibí tu mensaje: '{message}'"
-    return jsonify({"status": "ok", "reply": respuesta}), 200
+    elif "botox" in incoming_msg:
+        respuesta = "Actualmente tenemos una oferta en Botox con Vistabel a 7€/unidad. ¿Quieres más información?"
 
-if __name__ == '__main__':
+    elif "cita" in incoming_msg or "agenda" in incoming_msg:
+        citas = obtener_disponibilidad()
+        if citas:
+            respuesta = "Estas son las próximas citas disponibles:\n"
+            for c in citas:
+                respuesta += f"📅 {c['date']} a las {c['time']}\n"
+            respuesta += "Por favor, responde con la fecha y hora que prefieras."
+        else:
+            respuesta = "No se encontraron citas disponibles en este momento. ¿Quieres que te avisemos cuando haya disponibilidad?"
+
+    elif "ubicación" in incoming_msg or "dónde están" in incoming_msg:
+        respuesta = "Nuestra clínica está en Calle Colón 48, Valencia. ¡Te esperamos! 📍"
+
+    else:
+        respuesta = "No entendí tu mensaje. ¿Podrías reformularlo? 😊"
+
+    # Guardar contexto en Redis
+    historial += f"\nGabriel: {respuesta}"
+    redis_client.set(sender, historial, ex=3600)  # Expira en 1 hora
+
+    msg.body(respuesta)
+    return str(resp)
+
+# Iniciar aplicación Flask
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
