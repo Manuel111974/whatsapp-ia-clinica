@@ -8,7 +8,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis (Para recordar la conversación)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -40,7 +40,7 @@ FIELDS = {
     "notas": "fldB9uItP4dhQDnCu"
 }
 
-# Función para verificar si el cliente ya está registrado en Airtable
+# Función para verificar si el paciente ya está registrado en Airtable
 def buscar_cliente_telefono(telefono):
     url = f"{AIRTABLE_URL}?filterByFormula=({FIELDS['telefono']}='{telefono}')"
     response = requests.get(url, headers=AIRTABLE_HEADERS)
@@ -98,9 +98,20 @@ def registrar_cita_airtable(nombre, telefono, fecha, hora, interes):
         return True, "✅ Tu cita ha sido registrada en nuestra agenda."
     return False, f"⚠️ No se pudo registrar la cita: {response.text}"
 
-# Función para obtener respuesta de OpenAI (GPT-4)
+# Función para obtener respuesta de OpenAI (GPT-4) con tono corporativo
 def obtener_respuesta_ia(mensaje):
-    prompt = f"Paciente: {mensaje}\nGabriel:"
+    prompt = f"""
+    Eres Gabriel, el asistente virtual de Sonrisas Hollywood y Albane Clinic. 
+    Tu misión es responder de manera profesional, clara y concisa. 
+    Proporciona información sobre tratamientos dentales, estética facial y promociones.
+    
+    Si el usuario pregunta sobre tratamientos, responde con detalles.
+    Si el usuario pregunta por precios, da una respuesta transparente con las tarifas actuales.
+    Si el usuario quiere agendar una cita, guía el proceso de manera amigable.
+
+    Usuario: {mensaje}
+    Gabriel:
+    """
     respuesta = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "system", "content": prompt}],
@@ -111,7 +122,7 @@ def obtener_respuesta_ia(mensaje):
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
@@ -119,7 +130,11 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    if estado_usuario == "esperando_nombre":
+    if "cita" in incoming_msg or "agenda" in incoming_msg:
+        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+        respuesta = "¡Hola! 😊 Para agendar una cita, dime tu nombre completo."
+
+    elif estado_usuario == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
         respuesta = f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞."
@@ -148,6 +163,7 @@ def webhook():
 
         exito, mensaje = registrar_cita_airtable(nombre, telefono, fecha, hora, interes)
         respuesta = mensaje
+        redis_client.delete(sender + "_estado")
 
     else:
         respuesta = obtener_respuesta_ia(incoming_msg)
