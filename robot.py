@@ -26,8 +26,8 @@ HEADERS = {
 }
 
 # ⚠️ **CAMBIA ESTOS VALORES SEGÚN TU CONFIGURACIÓN EN KOIBOX**
-KOIBOX_USER_ID = "Gabriel"  # Usuario que agenda la cita
-KOIBOX_SERVICIO_ID = 5  # ⚠️ ID del servicio "Primera Visita" (ajústalo según Koibox)
+KOIBOX_USER_ID = 10  # ⚠️ ID numérico real de Gabriel en Koibox
+KOIBOX_SERVICIO_ID = 5  # ⚠️ ID real del servicio "Primera Visita" en Koibox
 
 # Función para formatear la fecha a YYYY-MM-DD
 def formatear_fecha(fecha_texto):
@@ -162,10 +162,6 @@ def webhook():
             respuesta = mensaje
         else:
             respuesta = "⚠️ No se pudo crear el cliente en Koibox."
-
-    elif "cita" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
     msg.body(respuesta)
     return str(resp)
