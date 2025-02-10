@@ -21,7 +21,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID del empleado "Gabriel Asistente IA" en Koibox
+# ID del empleado "Gabriel Asistente IA" en Koibox (debe configurarse correctamente)
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Buscar cliente en Koibox**
@@ -32,6 +32,8 @@ def buscar_cliente(telefono):
     if response.status_code == 200:
         try:
             clientes_data = response.json()
+            print(f"📩 Respuesta de Koibox al buscar cliente: {clientes_data}")
+
             if isinstance(clientes_data, dict) and "clientes" in clientes_data:
                 clientes = clientes_data["clientes"]
             elif isinstance(clientes_data, list):
@@ -62,7 +64,9 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     
     if response.status_code == 201:
-        return response.json().get("value")  # Devuelve el ID del cliente recién creado
+        cliente_data = response.json()
+        print(f"✅ Cliente creado en Koibox: {cliente_data}")
+        return cliente_data.get("value")  # Devuelve el ID del cliente recién creado
     else:
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
@@ -79,12 +83,16 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
         "servicios": [{"value": servicio_id}],
         "estado": {"value": 1, "text": "Programada"}
     }
-    
+
+    print(f"📩 Enviando cita a Koibox: {datos_cita}")  # DEBUG
+
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-    
+
     if response.status_code == 201:
+        print(f"✅ Cita creada con éxito: {response.json()}")
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
+        print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Función para calcular la hora de finalización**
