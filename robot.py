@@ -17,26 +17,45 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Configuración de Twilio para notificaciones a Manuel
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "TU_SID_AQUÍ")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "TU_TOKEN_AQUÍ")
+TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"  # Número oficial de Twilio para WhatsApp
+MANUEL_WHATSAPP_NUMBER = "whatsapp:+34XXXXXXXXX"  # Tu número de WhatsApp
+
 # Información de Sonrisas Hollywood y Albane Clinic
 INFO_CLINICA = {
-    "horarios": "Estamos abiertos de lunes a viernes de 10:00 a 20:00 y sábados de 10:00 a 14:00.",
-    "botox": "El tratamiento de Botox cuesta 7€ por unidad y se realiza en sesiones rápidas con resultados visibles en pocos días.",
-    "diseño de sonrisa": "El diseño de sonrisa se realiza con carillas de composite o porcelana. El ticket medio es de 2.500€.",
-    "ortodoncia": "Trabajamos con Invisalign para ortodoncia invisible. Resultados óptimos con máxima comodidad.",
-    "medicina estética": "Ofrecemos tratamientos como rellenos con ácido hialurónico, lifting Radiesse, hilos tensores y más."
+    "horarios": "⏰ Estamos abiertos de lunes a viernes de 10:00 a 20:00 y sábados de 10:00 a 14:00.",
+    "botox": "💉 El tratamiento de Botox cuesta 7€ por unidad y los resultados son visibles en pocos días.",
+    "diseño de sonrisa": "😁 El diseño de sonrisa con carillas tiene un ticket medio de 2.500€. Usamos composite o porcelana.",
+    "ortodoncia": "🦷 Trabajamos con Invisalign para ortodoncia invisible, cómodo y sin brackets.",
+    "medicina estética": "✨ Ofrecemos rellenos con ácido hialurónico, lifting Radiesse, hilos tensores y más."
 }
 
-# Función para buscar si un cliente ya existe en Airtable
+# Enviar notificación por WhatsApp cuando alguien solicita una cita
+def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, interes):
+    mensaje = f"📢 *Nueva solicitud de cita*\n👤 Nombre: {nombre}\n📞 Teléfono: {telefono}\n📅 Fecha: {fecha}\n⏰ Hora: {hora}\n💉 Interés: {interes}"
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    data = {
+        "From": TWILIO_WHATSAPP_NUMBER,
+        "To": MANUEL_WHATSAPP_NUMBER,
+        "Body": mensaje
+    }
+    auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    response = requests.post(url, data=data, auth=auth)
+    return response.status_code == 201
+
+# Buscar si el cliente ya existe en Airtable
 def buscar_cliente(telefono):
     url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}?filterByFormula={{fldNjWFRNcriIDMqf}}='{telefono}'"
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         records = response.json().get("records", [])
         if records:
-            return records[0]["id"]  # Devuelve el ID del cliente en Airtable
+            return records[0]["id"]
     return None  # Cliente no encontrado
 
-# Función para registrar un nuevo cliente en Airtable
+# Registrar nuevo cliente en Airtable
 def registrar_cliente(nombre, telefono):
     url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
     data = {
@@ -56,7 +75,7 @@ def registrar_cliente(nombre, telefono):
         print(f"❌ Error creando cliente: {response.json()}")
         return None
 
-# Función para registrar una cita en Airtable
+# Registrar cita en Airtable
 def registrar_cita(cliente_id, fecha, hora, interes):
     url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
     data = {
@@ -85,7 +104,7 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # Respuestas a preguntas frecuentes
+    # Respuestas sobre información de la clínica
     if incoming_msg in INFO_CLINICA:
         msg.body(INFO_CLINICA[incoming_msg])
         return str(resp)
@@ -121,32 +140,16 @@ def webhook():
 
     elif sender.endswith("_esperando_interes"):
         interes = incoming_msg
-        request.values["Interes"] = interes
+        nombre, telefono, fecha, hora = request.values.get("Nombre"), request.values.get("Telefono"), request.values.get("Fecha"), request.values.get("Hora")
 
-        # Buscar o registrar cliente en Airtable
-        nombre = request.values.get("Nombre")
-        telefono = request.values.get("Telefono")
-        fecha = request.values.get("Fecha")
-        hora = request.values.get("Hora")
-
-        cliente_id = buscar_cliente(telefono)
-        if not cliente_id:
-            cliente_id = registrar_cliente(nombre, telefono)
-
-        if cliente_id:
-            exito = registrar_cita(cliente_id, fecha, hora, interes)
-            if exito:
-                msg.body("✅ ¡Tu cita ha sido programada! Nos vemos pronto en la clínica. 😊")
-            else:
-                msg.body("⚠️ Hubo un problema al registrar la cita. Inténtalo nuevamente.")
+        cliente_id = buscar_cliente(telefono) or registrar_cliente(nombre, telefono)
+        if cliente_id and registrar_cita(cliente_id, fecha, hora, interes):
+            enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, interes)
+            msg.body("✅ ¡Tu cita ha sido programada! Nos vemos pronto. 😊")
         else:
-            msg.body("⚠️ No se pudo registrar al paciente en Airtable.")
+            msg.body("⚠️ Hubo un problema al registrar la cita. Inténtalo nuevamente.")
 
-    else:
-        msg.body("🤖 No entendí tu mensaje. ¿Podrías reformularlo?")
-    
     return str(resp)
 
-# Iniciar aplicación Flask
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
