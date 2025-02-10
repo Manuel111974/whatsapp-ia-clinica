@@ -3,6 +3,7 @@ import redis
 import requests
 import openai
 from flask import Flask, request
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
@@ -18,8 +19,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # Configuración de Twilio
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
-MANUEL_WHATSAPP_NUMBER = "whatsapp:+34684472593"
+TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"  # Número sandbox de Twilio
+MANUEL_WHATSAPP_NUMBER = "whatsapp:+34684472593"  # Tu número de WhatsApp
+
+# **Cliente de Twilio**
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # 🔥 **Función para generar respuestas con OpenAI GPT-4-Turbo**
 def generar_respuesta(mensaje_usuario, historial):
@@ -36,7 +40,7 @@ def generar_respuesta(mensaje_usuario, historial):
 
     try:
         respuesta_openai = openai.ChatCompletion.create(
-            model="gpt-4-turbo",  # 📌 CAMBIAMOS A GPT-4-TURBO
+            model="gpt-4-turbo",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=150,
             temperature=0.7
@@ -49,7 +53,8 @@ def generar_respuesta(mensaje_usuario, historial):
 # 🔥 **Función para enviar WhatsApp a Manuel cuando alguien pide cita**
 def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
     if not (nombre and telefono and fecha and hora and servicio):
-        return False  # No enviar si hay datos vacíos
+        print("❌ No se enviará WhatsApp. Faltan datos.")
+        return False
 
     mensaje = (f"📢 *Nueva solicitud de cita*\n"
                f"👤 *Nombre:* {nombre}\n"
@@ -58,16 +63,17 @@ def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
                f"⏰ *Hora:* {hora}\n"
                f"💉 *Servicio:* {servicio}")
 
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-    data = {
-        "From": TWILIO_WHATSAPP_NUMBER,
-        "To": MANUEL_WHATSAPP_NUMBER,
-        "Body": mensaje
-    }
-    auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    response = requests.post(url, data=data, auth=auth)
-
-    return response.status_code == 201
+    try:
+        message = client.messages.create(
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=MANUEL_WHATSAPP_NUMBER,
+            body=mensaje
+        )
+        print(f"✅ Mensaje de WhatsApp enviado con SID: {message.sid}")
+        return True
+    except Exception as e:
+        print(f"❌ Error al enviar WhatsApp: {e}")
+        return False
 
 # **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
