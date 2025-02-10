@@ -1,111 +1,70 @@
 import os
-import redis
-import openai
 import requests
-from flask import Flask, request
+import json
+from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-
-# Configuración de OpenAI (GPT-4)
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
 # Configuración de Airtable
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")  
-AIRTABLE_BASE_ID = "appLzlE5aJOuFkSZb"  
-AIRTABLE_TABLE_ID = "tblhdHTMAwFxBxJly"  
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY", "TU_AIRTABLE_TOKEN_AQUÍ")
+BASE_ID = "appLzlE5aJOuFkSZb"  # Base ID de Airtable
+TABLE_NAME = "tblhdHTMAwFxBxJly"  # ID de la tabla de clientes
 
-# URL de la API de Airtable
-AIRTABLE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}"
-
-# Headers de autenticación para Airtable
-AIRTABLE_HEADERS = {
+HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
 
-# IDs de los campos en Airtable
-FIELDS = {
-    "nombre": "fldcnZz38hH0Ggqaj",
-    "telefono": "fldNjWFRNcriIDMqf",
-    "fecha": "fldfoFgZZ9a5V37cq",
-    "hora": "fldEXJh063AXZ7IDw",
-    "interes": "fldLAUkuJ6dUe1BH4",
-    "estado": "fld311mg19eXxHWr",
-    "notas": "fldB9uItP4dhQDnCu"
-}
-
-# Función para verificar si el paciente ya está registrado en Airtable
-def buscar_cliente_telefono(telefono):
-    url = f"{AIRTABLE_URL}?filterByFormula=({FIELDS['telefono']}='{telefono}')"
-    response = requests.get(url, headers=AIRTABLE_HEADERS)
-
+# Función para buscar si un cliente ya existe en Airtable
+def buscar_cliente(telefono):
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}?filterByFormula={{fldNjWFRNcriIDMqf}}='{telefono}'"
+    response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         records = response.json().get("records", [])
         if records:
-            print(f"🔍 Cliente encontrado en Airtable: {records[0]['id']}")
-            return records[0]["id"]  # Devuelve el ID del cliente si existe
-    print("⚠️ Cliente NO encontrado en Airtable")
+            return records[0]["id"]  # Devuelve el ID del cliente en Airtable
     return None  # Cliente no encontrado
 
 # Función para registrar un nuevo cliente en Airtable
-def registrar_cliente_airtable(nombre, telefono):
-    datos_cliente = {
+def registrar_cliente(nombre, telefono):
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
+    data = {
         "records": [
             {
                 "fields": {
-                    FIELDS["nombre"]: nombre,
-                    FIELDS["telefono"]: telefono
+                    "fldcn2z38hHOGgqaJ": nombre,  # Nombre completo
+                    "fldNjWFRNcriIDMqf": telefono  # Teléfono
                 }
             }
         ]
     }
-    print(f"📩 Enviando datos a Airtable para registrar cliente: {datos_cliente}")
-    response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cliente)
-    
-    print(f"📩 Respuesta de Airtable al registrar cliente: {response.status_code} - {response.text}")
+    response = requests.post(url, headers=HEADERS, json=data)
+    if response.status_code == 200:
+        return response.json()["records"][0]["id"]
+    else:
+        print(f"❌ Error creando cliente: {response.json()}")
+        return None
 
-    if response.status_code in [200, 201]:
-        return response.json()["records"][0]["id"]  # Devuelve el ID del cliente
-    return None
-
-# Función para registrar cita en Airtable
-def registrar_cita_airtable(nombre, telefono, fecha, hora, interes):
-    cliente_id = buscar_cliente_telefono(telefono)
-
-    if not cliente_id:  # Si el cliente no existe, lo registramos primero
-        cliente_id = registrar_cliente_airtable(nombre, telefono)
-        if not cliente_id:
-            print("❌ Error: No se pudo registrar al cliente en Airtable")
-            return False, "⚠️ No se pudo registrar al paciente en Airtable."
-
-    datos_cita = {
+# Función para registrar una cita en Airtable
+def registrar_cita(cliente_id, fecha, hora, interes):
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
+    data = {
         "records": [
             {
                 "fields": {
-                    FIELDS["nombre"]: [cliente_id],  
-                    FIELDS["fecha"]: fecha,  
-                    FIELDS["hora"]: hora,  
-                    FIELDS["interes"]: interes,  
-                    FIELDS["estado"]: "Programada",  
-                    FIELDS["notas"]: f"Interesado en {interes} - Agendado por Gabriel (IA)"
+                    "fldiD6bE8zo81NV5V": fecha,  # Fecha de la cita
+                    "fldEXJhD63AXZ7IDw": hora,  # Hora de la cita
+                    "fldho86SgoGpcLFjR": interes,  # Interés (tratamiento)
+                    "fld311mgl9eXxHWIr": "Programada",  # Estado de la cita
+                    "fldB9uItP4dHqDnCu": f"Interesado en: {interes}"  # Notas del paciente
                 }
             }
         ]
     }
-    print(f"📩 Enviando datos a Airtable para registrar cita: {datos_cita}")
-    response = requests.post(AIRTABLE_URL, headers=AIRTABLE_HEADERS, json=datos_cita)
-
-    print(f"📩 Respuesta de Airtable al registrar cita: {response.status_code} - {response.text}")
-
-    if response.status_code in [200, 201]:
-        return True, "✅ Tu cita ha sido registrada en nuestra agenda."
-    return False, f"⚠️ No se pudo registrar la cita: {response.text}"
+    response = requests.post(url, headers=HEADERS, json=data)
+    return response.status_code == 200
 
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -113,53 +72,66 @@ def webhook():
     incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
+    # Inicializar respuesta de Twilio
     resp = MessagingResponse()
     msg = resp.message()
 
-    estado_usuario = redis_client.get(sender + "_estado") or ""
+    if "cita" in incoming_msg or "agendar" in incoming_msg:
+        msg.body("¡Hola! 😊 Para agendar una cita, dime tu nombre completo.")
+        return str(resp)
 
-    if "cita" in incoming_msg or "agenda" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        respuesta = "¡Hola! 😊 Para agendar una cita, dime tu nombre completo."
+    elif sender.endswith("_esperando_nombre"):
+        nombre = incoming_msg
+        request.values["Nombre"] = nombre
+        msg.body("Gracias. Ahora dime tu número de teléfono 📞.")
+        return str(resp)
 
-    elif estado_usuario == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        respuesta = f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞."
+    elif sender.endswith("_esperando_telefono"):
+        telefono = incoming_msg
+        request.values["Telefono"] = telefono
+        msg.body("¡Perfecto! Ahora dime qué fecha prefieres para la cita 📅 (Ejemplo: '12/02/2025').")
+        return str(resp)
 
-    elif estado_usuario == "esperando_telefono":
-        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! Ahora dime qué fecha prefieres (Ejemplo: '12/02/2025') 📅."
+    elif sender.endswith("_esperando_fecha"):
+        fecha = incoming_msg
+        request.values["Fecha"] = fecha
+        msg.body("Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00').")
+        return str(resp)
 
-    elif estado_usuario == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        respuesta = "Genial. ¿A qué hora te gustaría la cita? (Ejemplo: '16:00') ⏰"
+    elif sender.endswith("_esperando_hora"):
+        hora = incoming_msg
+        request.values["Hora"] = hora
+        msg.body("¿Qué tratamiento te interesa? (Ejemplo: 'Botox', 'Diseño de sonrisa', 'Ortodoncia') 😁.")
+        return str(resp)
 
-    elif estado_usuario == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_interes", ex=600)
-        respuesta = "¿Qué tratamiento te interesa? (Ejemplo: 'Botox, diseño de sonrisa, ortodoncia') 😊."
-
-    elif estado_usuario == "esperando_interes":
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
+    elif sender.endswith("_esperando_interes"):
         interes = incoming_msg
+        request.values["Interes"] = interes
 
-        print(f"🔍 Datos obtenidos antes de enviar a Airtable: {nombre}, {telefono}, {fecha}, {hora}, {interes}")
+        # Buscar o registrar cliente en Airtable
+        nombre = request.values.get("Nombre")
+        telefono = request.values.get("Telefono")
+        fecha = request.values.get("Fecha")
+        hora = request.values.get("Hora")
 
-        exito, mensaje = registrar_cita_airtable(nombre, telefono, fecha, hora, interes)
-        respuesta = mensaje
-        redis_client.delete(sender + "_estado")
+        cliente_id = buscar_cliente(telefono)
+        if not cliente_id:
+            cliente_id = registrar_cliente(nombre, telefono)
+
+        if cliente_id:
+            exito = registrar_cita(cliente_id, fecha, hora, interes)
+            if exito:
+                msg.body("✅ ¡Tu cita ha sido programada! Nos vemos pronto en la clínica. 😊")
+            else:
+                msg.body("⚠️ Hubo un problema al registrar la cita. Inténtalo nuevamente.")
+        else:
+            msg.body("⚠️ No se pudo registrar al paciente en Airtable.")
 
     else:
-        respuesta = "No entendí tu mensaje. ¿Podrías reformularlo? 😊"
-
-    msg.body(respuesta)
+        msg.body("🤖 No entendí tu mensaje. ¿Podrías reformularlo?")
+    
     return str(resp)
 
+# Iniciar aplicación Flask
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    app.run(host="0.0.0.0", port=8080)
