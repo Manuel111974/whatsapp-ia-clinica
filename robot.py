@@ -21,12 +21,25 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
 MANUEL_WHATSAPP_NUMBER = "whatsapp:+34684472593"
 
-# 🔥 **Función para generar respuestas con OpenAI GPT-4-Turbo**
+# Configuración de Koibox API
+KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
+KOIBOX_URL = "https://api.koibox.cloud/api"
+HEADERS = {
+    "X-Koibox-Key": KOIBOX_API_KEY,
+    "Content-Type": "application/json"
+}
+
+# 🔥 **Personalización de Gabriel**
+GABRIEL_PERSONALIDAD = """
+Eres Gabriel, el asistente virtual de *Sonrisas Hollywood*, una clínica especializada en *diseño de sonrisas y odontología estética* en Valencia.
+Solo hablas de *Sonrisas Hollywood*, aunque sabes que Albane Clinic comparte la ubicación.  
+Responde de forma clara y profesional, pero siempre centrándote en *Sonrisas Hollywood*.
+"""
+
+# 🔹 **Función para generar respuestas con OpenAI**
 def generar_respuesta(mensaje_usuario, historial):
     prompt = f"""
-    Eres Gabriel, el asistente virtual de Sonrisas Hollywood y Albane Clinic. 
-    Responde de manera educada y profesional, ofreciendo información clara sobre tratamientos odontológicos y estéticos.
-
+    {GABRIEL_PERSONALIDAD}
     Contexto de conversación previa:
     {historial}
 
@@ -36,7 +49,7 @@ def generar_respuesta(mensaje_usuario, historial):
 
     try:
         respuesta_openai = openai.ChatCompletion.create(
-            model="gpt-4-turbo",  # 📌 CAMBIAMOS A GPT-4-TURBO
+            model="gpt-4-turbo",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=150,
             temperature=0.7
@@ -46,12 +59,32 @@ def generar_respuesta(mensaje_usuario, historial):
         print(f"Error con OpenAI: {e}")
         return "Lo siento, hubo un problema al generar la respuesta. ¿Puedes repetir tu consulta?"
 
-# 🔥 **Función para enviar WhatsApp a Manuel cuando alguien pide cita**
-def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
-    if not (nombre and telefono and fecha and hora and servicio):
-        return False  # No enviar si hay datos vacíos
+# 🔹 **Función para buscar cliente en Koibox**
+def buscar_cliente(telefono):
+    url = f"{KOIBOX_URL}/clientes/"
+    response = requests.get(url, headers=HEADERS, params={"movil": telefono})
+    
+    if response.status_code == 200:
+        clientes = response.json()
+        if clientes and len(clientes) > 0:
+            return clientes[0]["id_cliente"]
+    return None
 
-    mensaje = (f"📢 *Nueva solicitud de cita*\n"
+# 🔹 **Función para crear un cliente en Koibox**
+def crear_cliente(nombre, telefono):
+    url = f"{KOIBOX_URL}/clientes/"
+    datos_cliente = {"nombre": nombre, "movil": telefono}
+    response = requests.post(url, headers=HEADERS, json=datos_cliente)
+    
+    if response.status_code == 201:
+        return response.json().get("id_cliente")
+    else:
+        print(f"❌ Error creando cliente en Koibox: {response.text}")
+        return None
+
+# 🔹 **Función para enviar notificación de cita a Manuel**
+def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
+    mensaje = (f"📢 *Nueva solicitud de cita en Sonrisas Hollywood*\n"
                f"👤 *Nombre:* {nombre}\n"
                f"📞 *Teléfono:* {telefono}\n"
                f"📅 *Fecha:* {fecha}\n"
@@ -59,74 +92,78 @@ def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
                f"💉 *Servicio:* {servicio}")
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-    data = {
-        "From": TWILIO_WHATSAPP_NUMBER,
-        "To": MANUEL_WHATSAPP_NUMBER,
-        "Body": mensaje
-    }
+    data = {"From": TWILIO_WHATSAPP_NUMBER, "To": MANUEL_WHATSAPP_NUMBER, "Body": mensaje}
     auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     response = requests.post(url, data=data, auth=auth)
 
     return response.status_code == 201
 
-# **Webhook para recibir mensajes de WhatsApp**
+# **📌 Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     # Inicializar respuesta de Twilio
     resp = MessagingResponse()
     msg = resp.message()
-    respuesta = "No entendí tu mensaje. ¿Puedes reformularlo? 😊"
 
-    # Obtener historial del usuario en Redis
-    historial = redis_client.get(sender) or ""
+    estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # **Flujo de agendamiento de citas**
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        respuesta = "¡Genial! Primero dime tu nombre completo 😊."
+    # **🗺️ Responder preguntas sobre la ubicación**
+    if "dónde están" in incoming_msg or "ubicación" in incoming_msg:
+        respuesta = "📍 *Sonrisas Hollywood* está en *Calle Colón 48, Valencia*. ¡Te esperamos para transformar tu sonrisa! 😁✨"
 
-    elif redis_client.get(sender + "_estado") == "esperando_nombre":
+    # **📌 Preguntar si es paciente**
+    elif "cita" in incoming_msg or "reservar" in incoming_msg:
+        redis_client.set(sender + "_estado", "verificando_paciente", ex=600)
+        respuesta = "¿Eres paciente de Sonrisas Hollywood? Responde 'Sí' o 'No'."
+
+    # **🛠️ Si ya es paciente, buscarlo en Koibox**
+    elif estado_usuario == "verificando_paciente":
+        if "si" in incoming_msg:
+            redis_client.set(sender + "_estado", "esperando_telefono_paciente", ex=600)
+            respuesta = "¡Genial! ¿Cuál es tu número de teléfono registrado? 📞"
+        else:
+            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+            respuesta = "¡No hay problema! Primero dime tu nombre completo 😊."
+
+    # **📌 Confirmar teléfono y buscar en Koibox**
+    elif estado_usuario == "esperando_telefono_paciente":
+        cliente_id = buscar_cliente(incoming_msg)
+        if cliente_id:
+            redis_client.set(sender + "_cliente_id", cliente_id, ex=600)
+            redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+            respuesta = "Perfecto. ¿Qué día prefieres para tu cita? 📅"
+        else:
+            respuesta = "❌ No encontramos tu número. ¿Puedes confirmarlo o escribir 'No' para registrarte?"
+
+    # **📌 Si no es paciente, registrar datos**
+    elif estado_usuario == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        respuesta = f"Gracias, {incoming_msg} 😊. Ahora dime tu número de teléfono 📞."
+        respuesta = "Gracias 😊. Ahora dime tu número de teléfono 📞."
 
-    elif redis_client.get(sender + "_estado") == "esperando_telefono":
+    elif estado_usuario == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '12/02/2025')"
+        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅"
 
-    elif redis_client.get(sender + "_estado") == "esperando_fecha":
+    # **📌 Confirmar fecha, hora y servicio**
+    elif estado_usuario == "esperando_fecha":
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
+        respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰"
 
-    elif redis_client.get(sender + "_estado") == "esperando_hora":
+    elif estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
-        respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
-
-    elif redis_client.get(sender + "_estado") == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
-        servicio = redis_client.get(sender + "_servicio")
-
-        if nombre and telefono and fecha and hora and servicio:
-            enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio)
-            respuesta = "✅ ¡Gracias! Tu cita ha sido registrada. Te contactaremos pronto."
+        respuesta = "¿Qué tratamiento necesitas? 💉 (Ejemplo: 'Botox', 'Diseño de sonrisa')"
 
     else:
-        respuesta = generar_respuesta(incoming_msg, historial)
+        respuesta = generar_respuesta(incoming_msg, "")
 
     msg.body(respuesta)
-    redis_client.set(sender, historial + f"\nUsuario: {incoming_msg}\nGabriel: {respuesta}", ex=3600)
-
     return str(resp)
 
 # **Ruta principal**
@@ -134,6 +171,5 @@ def webhook():
 def home():
     return "✅ Gabriel está activo y funcionando correctamente."
 
-# **Ejecutar aplicación Flask**
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    app.run(host="0.0.0.0", port=8080)
