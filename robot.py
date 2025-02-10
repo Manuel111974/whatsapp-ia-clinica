@@ -21,7 +21,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID del empleado "Gabriel Asistente IA" en Koibox (debe configurarse correctamente)
+# ID del empleado "Gabriel Asistente IA" en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Buscar cliente en Koibox**
@@ -34,17 +34,15 @@ def buscar_cliente(telefono):
             clientes_data = response.json()
             print(f"📩 Respuesta de Koibox al buscar cliente: {clientes_data}")
 
-            if isinstance(clientes_data, dict) and "clientes" in clientes_data:
-                clientes = clientes_data["clientes"]
-            elif isinstance(clientes_data, list):
-                clientes = clientes_data
+            if "results" in clientes_data:
+                clientes = clientes_data["results"]
             else:
                 print("⚠️ Estructura inesperada en la respuesta de Koibox.")
                 return None
 
             for cliente in clientes:
                 if cliente.get("movil") == telefono:
-                    return cliente.get("value")  # Devuelve el ID del cliente si lo encuentra
+                    return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
         except Exception as e:
             print(f"❌ Error procesando la respuesta de Koibox: {e}")
             return None
@@ -66,7 +64,7 @@ def crear_cliente(nombre, telefono):
     if response.status_code == 201:
         cliente_data = response.json()
         print(f"✅ Cliente creado en Koibox: {cliente_data}")
-        return cliente_data.get("value")  # Devuelve el ID del cliente recién creado
+        return cliente_data.get("id")  # Devuelve el ID del cliente recién creado
     else:
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
@@ -78,10 +76,14 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
         "hora_inicio": hora,
         "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
         "notas": "Cita agendada por Gabriel (IA)",
+        "is_empleado_aleatorio": False,
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {"value": cliente_id},
         "servicios": [{"value": servicio_id}],
-        "estado": {"value": 1, "text": "Programada"}
+        "estado": {"value": 1, "text": "Programada"},
+        "is_notificada_por_sms": True,
+        "is_notificada_por_email": True,
+        "is_notificada_por_whatsapp": True
     }
 
     print(f"📩 Enviando cita a Koibox: {datos_cita}")  # DEBUG
