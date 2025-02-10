@@ -12,9 +12,6 @@ app = Flask(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI (GPT-4 Turbo)
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
 # Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/api"
@@ -25,19 +22,35 @@ HEADERS = {
 }
 
 # ID del empleado "Gabriel Asistente IA" en Koibox
-GABRIEL_USER_ID = 1  # ⚠️ SUSTITUIR CON EL ID REAL DE GABRIEL EN KOIBOX
+GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
-    
+
     if response.status_code == 200:
-        clientes = response.json()
-        for cliente in clientes:
-            if cliente["movil"] == telefono:
-                return cliente["value"]  # Devuelve el ID del cliente
-    return None
+        try:
+            clientes_data = response.json()
+            if isinstance(clientes_data, dict) and "clientes" in clientes_data:
+                clientes = clientes_data["clientes"]
+            elif isinstance(clientes_data, list):
+                clientes = clientes_data
+            else:
+                print("⚠️ Estructura inesperada en la respuesta de Koibox.")
+                return None
+
+            for cliente in clientes:
+                if cliente.get("movil") == telefono:
+                    return cliente.get("value")  # Devuelve el ID del cliente si lo encuentra
+        except Exception as e:
+            print(f"❌ Error procesando la respuesta de Koibox: {e}")
+            return None
+    else:
+        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+        return None
+
+    return None  # Si no encuentra el cliente, retorna None
 
 # 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
@@ -49,7 +62,7 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     
     if response.status_code == 201:
-        return response.json()["value"]  # Devuelve el ID del cliente recién creado
+        return response.json().get("value")  # Devuelve el ID del cliente recién creado
     else:
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
@@ -79,30 +92,6 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h, m = map(int, hora_inicio.split(":"))
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
-
-# 🔥 **Función de OpenAI para respuestas inteligentes**
-def generar_respuesta(mensaje_usuario, historial):
-    prompt = f"""
-    Eres Gabriel, el asistente virtual de Sonrisas Hollywood. 
-    Responde de manera educada y profesional sobre tratamientos odontológicos y estéticos.
-
-    Contexto de conversación previa:
-    {historial}
-
-    Usuario: {mensaje_usuario}
-    Gabriel:
-    """
-    try:
-        respuesta_openai = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=150,
-            temperature=0.7
-        )
-        return respuesta_openai["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"Error con OpenAI: {e}")
-        return "Lo siento, hubo un problema al generar la respuesta."
 
 # 📩 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
@@ -164,9 +153,6 @@ def webhook():
             respuesta = mensaje
         else:
             respuesta = "No pude registrar tu cita. Intenta más tarde."
-
-    else:
-        respuesta = generar_respuesta(incoming_msg, historial)
 
     msg.body(respuesta)
     return str(resp)
