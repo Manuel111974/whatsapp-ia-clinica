@@ -8,20 +8,20 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis para memoria temporal
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI
+# Configuración de OpenAI con el nuevo modelo
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Configuración de Twilio para WhatsApp
+# Configuración de Twilio
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
 MANUEL_WHATSAPP_NUMBER = "whatsapp:+34684472593"
 
-# Función para generar respuestas con OpenAI
+# 🔥 **Función para generar respuestas con OpenAI GPT-4-Turbo**
 def generar_respuesta(mensaje_usuario, historial):
     prompt = f"""
     Eres Gabriel, el asistente virtual de Sonrisas Hollywood y Albane Clinic. 
@@ -33,20 +33,20 @@ def generar_respuesta(mensaje_usuario, historial):
     Usuario: {mensaje_usuario}
     Gabriel:
     """
-    
+
     try:
-        respuesta_openai = openai.Completion.create(
-            model="text-davinci-003",
-            prompt=prompt,
-            max_tokens=100,
+        respuesta_openai = openai.ChatCompletion.create(
+            model="gpt-4-turbo",  # 📌 CAMBIAMOS A GPT-4-TURBO
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=150,
             temperature=0.7
         )
-        return respuesta_openai["choices"][0]["text"].strip()
+        return respuesta_openai["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"Error con OpenAI: {e}")
-        return "Lo siento, ha habido un problema al generar la respuesta. ¿Podrías repetir tu consulta?"
+        return "Lo siento, hubo un problema al generar la respuesta. ¿Puedes repetir tu consulta?"
 
-# Función para enviar WhatsApp a Manuel cuando alguien agenda una cita
+# 🔥 **Función para enviar WhatsApp a Manuel cuando alguien pide cita**
 def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
     if not (nombre and telefono and fecha and hora and servicio):
         return False  # No enviar si hay datos vacíos
@@ -66,10 +66,10 @@ def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
     }
     auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     response = requests.post(url, data=data, auth=auth)
-    
+
     return response.status_code == 201
 
-# Webhook para recibir mensajes de WhatsApp
+# **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip()
@@ -129,10 +129,11 @@ def webhook():
 
     return str(resp)
 
-# Ruta principal
+# **Ruta principal**
 @app.route("/")
 def home():
     return "✅ Gabriel está activo y funcionando correctamente."
 
+# **Ejecutar aplicación Flask**
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
