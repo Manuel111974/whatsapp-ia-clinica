@@ -23,22 +23,28 @@ HEADERS = {
 
 # ID del empleado "Gabriel Asistente IA" en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
-DEFAULT_SERVICE_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL DEL SERVICIO
+
+# Diccionario de servicios en Koibox (⚠️ Reemplazar con los IDs reales)
+SERVICIOS_DISPONIBLES = {
+    "botox": 2,  # ID del servicio de Botox
+    "diseño de sonrisa": 3,  # ID del servicio de Diseño de Sonrisa
+    "ortodoncia": 4
+}
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
     url = f"{KOIBOX_URL}/clientes/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        clientes_data = response.json()
-        print(f"📩 Respuesta de Koibox al buscar cliente: {clientes_data}")
-
-        for cliente in clientes_data.get("results", []):
-            if cliente.get("movil") == telefono:
-                return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
-    else:
-        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+    while url:
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code == 200:
+            clientes_data = response.json()
+            for cliente in clientes_data.get("results", []):
+                if cliente.get("movil") == telefono:
+                    return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
+            url = clientes_data.get("next")  # Paginación
+        else:
+            print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+            return None
     return None
 
 # 🆕 **Crear cliente en Koibox si no existe**
@@ -65,14 +71,14 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     return f"{h:02d}:{m:02d}"
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, fecha, hora, servicio_id=DEFAULT_SERVICE_ID):
+def crear_cita(cliente_id, fecha, hora, servicio_id):
     datos_cita = {
-        "titulo": "Cita Gabriel Asistente IA",  # ✅ Campo obligatorio agregado
+        "titulo": "Cita Gabriel Asistente IA",
         "notas": "Cita agendada por Gabriel (IA)",
         "duration": "01:00",
-        "fecha": fecha,  # ✅ Formato correcto YYYY-MM-DD
+        "fecha": fecha,
         "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
+        "hora_fin": calcular_hora_fin(hora, 1),
         "is_empleado_aleatorio": False,
         "is_notificada_por_sms": True,
         "is_notificada_por_email": True,
@@ -82,14 +88,12 @@ def crear_cita(cliente_id, fecha, hora, servicio_id=DEFAULT_SERVICE_ID):
         "precio_sin_descuento": 0,
         "descuento": 0,
         "is_cliente_en_centro": False,
-        "user": GABRIEL_USER_ID,  # ✅ Debe ser un entero
+        "user": GABRIEL_USER_ID,
         "created_by": GABRIEL_USER_ID,
-        "cliente": cliente_id,  # ✅ Debe ser un entero
-        "estado": 1,  # ✅ Debe ser un entero
-        "servicios": [servicio_id]  # ✅ Lista de enteros en lugar de diccionarios
+        "cliente": cliente_id,
+        "estado": 1,
+        "servicios": [servicio_id]
     }
-
-    print(f"📩 Enviando cita a Koibox: {datos_cita}")  # DEBUG
 
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
 
@@ -103,7 +107,7 @@ def crear_cita(cliente_id, fecha, hora, servicio_id=DEFAULT_SERVICE_ID):
 # 📩 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     # Inicializar respuesta de Twilio
@@ -111,55 +115,54 @@ def webhook():
     msg = resp.message()
     respuesta = "No entendí tu mensaje. ¿Puedes reformularlo? 😊"
 
-    # Obtener historial del usuario en Redis
-    historial = redis_client.get(sender) or ""
+    estado_actual = redis_client.get(sender + "_estado")
 
-    # **Flujo de citas**
     if "cita" in incoming_msg or "reservar" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
-    elif redis_client.get(sender + "_estado") == "esperando_nombre":
+    elif estado_actual == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
         respuesta = f"Gracias, {incoming_msg} 😊. Ahora dime tu número de teléfono 📞."
 
-    elif redis_client.get(sender + "_estado") == "esperando_telefono":
+    elif estado_actual == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
         respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-12')"
 
-    elif redis_client.get(sender + "_estado") == "esperando_fecha":
+    elif estado_actual == "esperando_fecha":
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_hora", ex=600)
         respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
 
-    elif redis_client.get(sender + "_estado") == "esperando_hora":
+    elif estado_actual == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
         respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
 
-    elif redis_client.get(sender + "_estado") == "esperando_servicio":
+    elif estado_actual == "esperando_servicio":
         redis_client.set(sender + "_servicio", incoming_msg, ex=600)
 
-        # Recopilar datos
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
         servicio = redis_client.get(sender + "_servicio")
 
-        # Buscar o crear cliente en Koibox
-        cliente_id = buscar_cliente(telefono)
-        if not cliente_id:
-            cliente_id = crear_cliente(nombre, telefono)
-
-        # Crear cita
-        if cliente_id:
-            exito, mensaje = crear_cita(cliente_id, fecha, hora, DEFAULT_SERVICE_ID)
-            respuesta = mensaje
+        servicio_id = SERVICIOS_DISPONIBLES.get(servicio, None)
+        if not servicio_id:
+            respuesta = f"⚠️ Lo siento, pero no tengo registrado ese servicio. ¿Podrías intentar de nuevo?"
         else:
-            respuesta = "No pude registrar tu cita. Intenta más tarde."
+            cliente_id = buscar_cliente(telefono)
+            if not cliente_id:
+                cliente_id = crear_cliente(nombre, telefono)
+
+            if cliente_id:
+                exito, mensaje = crear_cita(cliente_id, fecha, hora, servicio_id)
+                respuesta = mensaje
+            else:
+                respuesta = "No pude registrar tu cita. Intenta más tarde."
 
     msg.body(respuesta)
     return str(resp)
