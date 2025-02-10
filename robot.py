@@ -4,24 +4,17 @@ import requests
 from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 
-# Configurar logging detallado
+# Configuración de logs para depuración
 logging.basicConfig(level=logging.INFO)
 
-# Inicializar Flask
+# Inicialización de Flask
 app = Flask(__name__)
 
 # Variables de entorno
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
-KOIBOX_USER = os.getenv("KOIBOX_USER")
-KOIBOX_PASSWORD = os.getenv("KOIBOX_PASSWORD")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-REDIS_URL = os.getenv("REDIS_URL")
-
 KOIBOX_URL = "https://api.koibox.cloud/api/agenda/"
 
-# Sesión de usuario en memoria
+# Almacenar sesiones de usuarios temporalmente
 users_sessions = {}
 
 @app.route("/", methods=["GET"])
@@ -30,7 +23,7 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """ Recibe los mensajes de WhatsApp y responde con el asistente Gabriel. """
+    """ Manejo de mensajes entrantes de WhatsApp. """
     incoming_msg = request.values.get("Body", "").strip().lower()
     sender_number = request.values.get("From", "")
 
@@ -40,44 +33,54 @@ def webhook():
 
     logging.info(f"📩 Mensaje recibido de {sender_number}: {incoming_msg}")
 
+    # Si el usuario pide "cita", reiniciar sesión
     if "cita" in incoming_msg:
-        users_sessions[sender_number] = {}
+        users_sessions[sender_number] = {"estado": "esperando_fecha"}
         msg.body("📅 ¿Para qué día y hora deseas la cita? Formato: DD-MM-AAAA HH:MM")
         return str(resp)
 
-    if sender_number in users_sessions and "fecha" not in users_sessions[sender_number]:
-        try:
-            fecha_hora = incoming_msg.split()
-            fecha = fecha_hora[0]  # DD-MM-AAAA
-            hora = fecha_hora[1]  # HH:MM
-            users_sessions[sender_number]["fecha"] = fecha
-            users_sessions[sender_number]["hora"] = hora
-            msg.body("🔍 ¿Qué tratamiento necesitas? Ejemplo: 'Botox', 'Diseño de sonrisa'")
+    # Verificar si el usuario ya inició una solicitud de cita
+    if sender_number in users_sessions:
+        session = users_sessions[sender_number]
+
+        if session["estado"] == "esperando_fecha":
+            try:
+                fecha_hora = incoming_msg.split()
+                fecha = fecha_hora[0]  # DD-MM-AAAA
+                hora = fecha_hora[1]  # HH:MM
+                session["fecha"] = fecha
+                session["hora"] = hora
+                session["estado"] = "esperando_tratamiento"
+                msg.body("🔍 ¿Qué tratamiento necesitas? Ejemplo: 'Botox', 'Diseño de sonrisa'")
+                return str(resp)
+            except:
+                msg.body("⚠️ Formato incorrecto. Usa: DD-MM-AAAA HH:MM")
+                return str(resp)
+
+        elif session["estado"] == "esperando_tratamiento":
+            session["tratamiento"] = incoming_msg.title()
+            session["estado"] = "esperando_profesional"
+            msg.body("👨‍⚕️ ¿Tienes un profesional preferido? (Escribe el nombre o 'No')")
             return str(resp)
-        except:
-            msg.body("⚠️ Formato incorrecto. Usa: DD-MM-AAAA HH:MM")
+
+        elif session["estado"] == "esperando_profesional":
+            session["profesional"] = incoming_msg.title()
+            session["estado"] = "confirmando_cita"
+
+            msg.body("📌 Confirmando tu cita... un momento por favor.")
+
+            resultado = crear_cita_koibox(
+                session["fecha"],
+                session["hora"],
+                session["tratamiento"],
+                session["profesional"]
+            )
+
+            msg.body(resultado)
+            del users_sessions[sender_number]  # Limpiar sesión después de agendar la cita
             return str(resp)
 
-    if sender_number in users_sessions and "tratamiento" not in users_sessions[sender_number]:
-        users_sessions[sender_number]["tratamiento"] = incoming_msg.title()
-        msg.body("👨‍⚕️ ¿Tienes un profesional preferido? (Escribe el nombre o 'No')")
-        return str(resp)
-
-    if sender_number in users_sessions and "profesional" not in users_sessions[sender_number]:
-        users_sessions[sender_number]["profesional"] = incoming_msg.title()
-        msg.body("📌 Confirmando tu cita... un momento por favor.")
-
-        resultado = crear_cita_koibox(
-            users_sessions[sender_number]["fecha"],
-            users_sessions[sender_number]["hora"],
-            users_sessions[sender_number]["tratamiento"],
-            users_sessions[sender_number]["profesional"]
-        )
-
-        msg.body(resultado)
-        del users_sessions[sender_number]
-        return str(resp)
-
+    # Si el usuario no ha iniciado una solicitud, mostrar mensaje inicial
     msg.body("👋 ¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. Escribe 'cita' para reservar.")
     return str(resp)
 
@@ -86,7 +89,7 @@ def crear_cita_koibox(fecha, hora, tratamiento, profesional):
         "X-Koibox-Key": KOIBOX_API_KEY,
         "Content-Type": "application/json"
     }
-    
+
     data = {
         "fecha": fecha,
         "hora": hora,
