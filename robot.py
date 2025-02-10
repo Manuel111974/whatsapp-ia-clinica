@@ -1,9 +1,8 @@
 import os
 import requests
-import redis  # Para memoria temporal
-from flask import Flask, request
+import redis
+from flask import Flask, request, jsonify, session
 from twilio.twiml.messaging_response import MessagingResponse
-from langdetect import detect
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -18,16 +17,6 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "TU_SID_AQUÍ")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "TU_TOKEN_AQUÍ")
 TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
 MANUEL_WHATSAPP_NUMBER = "whatsapp:+34684472593"
-
-# Base de conocimiento (Preguntas Frecuentes)
-RESPUESTAS_FAQ = {
-    "precio botox": "💉 El precio por unidad de bótox en la clínica es de 7€.",
-    "diseño de sonrisa": "😁 En Sonrisas Hollywood, el ticket medio del diseño de sonrisa es de 2.500€.",
-    "horario": "🕘 Abrimos de lunes a viernes de 9:00 a 20:00.",
-    "ubicación": "📍 Nos encontramos en Calle Colón 48, Valencia.",
-    "teléfono": "📞 Puedes contactarnos al 656 656 656.",
-    "promociones": "🎉 Actualmente tenemos valoración gratuita en medicina estética.",
-}
 
 # Función para enviar WhatsApp a Manuel cuando alguien agenda una cita
 def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
@@ -51,15 +40,8 @@ def enviar_notificacion_whatsapp(nombre, telefono, fecha, hora, servicio):
 # Webhook para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
-
-    # Detectar idioma del mensaje
-    idioma = "es"
-    try:
-        idioma = detect(incoming_msg)
-    except:
-        pass
 
     # Inicializar respuesta de Twilio
     resp = MessagingResponse()
@@ -123,13 +105,7 @@ def webhook():
 
         return str(resp)
 
-    # **Responde preguntas frecuentes**
-    for key, respuesta in RESPUESTAS_FAQ.items():
-        if key in incoming_msg.lower():
-            msg.body(respuesta)
-            return str(resp)
-
-    # **Mensaje de error mejorado**
+    # **Si el usuario escribe algo que no es una cita**
     msg.body("No estoy seguro de haber entendido. ¿Puedes reformularlo? 😊")
     return str(resp)
 
