@@ -23,6 +23,7 @@ HEADERS = {
 
 # ID del empleado "Gabriel Asistente IA" en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
+DEFAULT_SERVICE_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL DEL SERVICIO
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -30,27 +31,15 @@ def buscar_cliente(telefono):
     response = requests.get(url, headers=HEADERS)
 
     if response.status_code == 200:
-        try:
-            clientes_data = response.json()
-            print(f"📩 Respuesta de Koibox al buscar cliente: {clientes_data}")
+        clientes_data = response.json()
+        print(f"📩 Respuesta de Koibox al buscar cliente: {clientes_data}")
 
-            if "results" in clientes_data:
-                clientes = clientes_data["results"]
-            else:
-                print("⚠️ Estructura inesperada en la respuesta de Koibox.")
-                return None
-
-            for cliente in clientes:
-                if cliente.get("movil") == telefono:
-                    return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
-        except Exception as e:
-            print(f"❌ Error procesando la respuesta de Koibox: {e}")
-            return None
+        for cliente in clientes_data.get("results", []):
+            if cliente.get("movil") == telefono:
+                return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
     else:
         print(f"❌ Error al obtener clientes de Koibox: {response.text}")
-        return None
-
-    return None  # Si no encuentra el cliente, retorna None
+    return None
 
 # 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
@@ -69,21 +58,35 @@ def crear_cliente(nombre, telefono):
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
 
+# ⏰ **Función para calcular la hora de finalización**
+def calcular_hora_fin(hora_inicio, duracion_horas):
+    h, m = map(int, hora_inicio.split(":"))
+    h += duracion_horas
+    return f"{h:02d}:{m:02d}"
+
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, fecha, hora, servicio_id):
+def crear_cita(cliente_id, fecha, hora, servicio_id=DEFAULT_SERVICE_ID):
     datos_cita = {
-        "fecha": fecha,
+        "titulo": "Cita Gabriel Asistente IA",  # ✅ Campo obligatorio agregado
+        "notas": "Cita agendada por Gabriel (IA)",
+        "duration": "01:00",
+        "fecha": fecha,  # ✅ Formato correcto YYYY-MM-DD
         "hora_inicio": hora,
         "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
-        "notas": "Cita agendada por Gabriel (IA)",
         "is_empleado_aleatorio": False,
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id},
-        "servicios": [{"value": servicio_id}],
-        "estado": {"value": 1, "text": "Programada"},
         "is_notificada_por_sms": True,
         "is_notificada_por_email": True,
-        "is_notificada_por_whatsapp": True
+        "is_notificada_por_whatsapp": True,
+        "origen": "c",
+        "precio": 0,
+        "precio_sin_descuento": 0,
+        "descuento": 0,
+        "is_cliente_en_centro": False,
+        "user": GABRIEL_USER_ID,  # ✅ Debe ser un entero
+        "created_by": GABRIEL_USER_ID,
+        "cliente": cliente_id,  # ✅ Debe ser un entero
+        "estado": 1,  # ✅ Debe ser un entero
+        "servicios": [servicio_id]  # ✅ Lista de enteros en lugar de diccionarios
     }
 
     print(f"📩 Enviando cita a Koibox: {datos_cita}")  # DEBUG
@@ -96,12 +99,6 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
     else:
         print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-
-# ⏰ **Función para calcular la hora de finalización**
-def calcular_hora_fin(hora_inicio, duracion_horas):
-    h, m = map(int, hora_inicio.split(":"))
-    h += duracion_horas
-    return f"{h:02d}:{m:02d}"
 
 # 📩 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
@@ -130,7 +127,7 @@ def webhook():
     elif redis_client.get(sender + "_estado") == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '12/02/2025')"
+        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-12')"
 
     elif redis_client.get(sender + "_estado") == "esperando_fecha":
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
@@ -159,7 +156,7 @@ def webhook():
 
         # Crear cita
         if cliente_id:
-            exito, mensaje = crear_cita(cliente_id, fecha, hora, 1)  # ID del servicio
+            exito, mensaje = crear_cita(cliente_id, fecha, hora, DEFAULT_SERVICE_ID)
             respuesta = mensaje
         else:
             respuesta = "No pude registrar tu cita. Intenta más tarde."
