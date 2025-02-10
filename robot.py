@@ -30,7 +30,7 @@ def obtener_id_empleado():
         empleados = response.json().get("results", [])
         for empleado in empleados:
             if empleado.get("email") == "Asistenteia@sonrisashollywood.com":  # Buscar por email
-                return empleado.get("id")  # ID real del empleado
+                return {"value": empleado.get("id"), "text": empleado.get("text")}
     print("❌ No se encontró el empleado 'Gabriel Asistente IA'.")
     return None
 
@@ -43,7 +43,7 @@ def obtener_id_servicio(nombre_servicio):
         servicios = response.json().get("results", [])
         for servicio in servicios:
             if servicio.get("nombre").strip().lower() == nombre_servicio.strip().lower():
-                return servicio.get("id")  # ID real del servicio
+                return {"value": servicio.get("id"), "text": servicio.get("nombre")}
     print(f"❌ No se encontró el servicio '{nombre_servicio}'.")
     return None
 
@@ -56,7 +56,7 @@ def buscar_cliente(telefono):
         clientes_data = response.json()
         for cliente in clientes_data.get("results", []):
             if cliente.get("movil") == telefono:
-                return cliente.get("id")
+                return {"value": cliente.get("id"), "text": cliente.get("nombre")}
     print(f"❌ Cliente con teléfono {telefono} no encontrado.")
     return None
 
@@ -72,7 +72,7 @@ def crear_cliente(nombre, telefono):
     if response.status_code == 201:
         cliente_data = response.json()
         print(f"✅ Cliente creado en Koibox: {cliente_data}")
-        return cliente_data.get("id")  # ID del cliente recién creado
+        return {"value": cliente_data.get("id"), "text": cliente_data.get("nombre")}
     print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
@@ -84,13 +84,13 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, fecha, hora, servicio_nombre):
-    empleado_id = obtener_id_empleado()
-    servicio_id = obtener_id_servicio(servicio_nombre)
+    empleado = obtener_id_empleado()
+    servicio = obtener_id_servicio(servicio_nombre)
 
-    if not empleado_id:
+    if not empleado:
         return False, "⚠️ No se encontró el empleado Gabriel en Koibox."
     
-    if not servicio_id:
+    if not servicio:
         return False, f"⚠️ No se encontró el servicio '{servicio_nombre}' en Koibox."
 
     datos_cita = {
@@ -109,11 +109,11 @@ def crear_cita(cliente_id, fecha, hora, servicio_nombre):
         "precio_sin_descuento": 0,
         "descuento": 0,
         "is_cliente_en_centro": False,
-        "user": empleado_id,  # ✅ ID del empleado
-        "created_by": empleado_id,
-        "cliente": cliente_id,  # ✅ ID del cliente
-        "estado": 1,  # ✅ Estado correcto
-        "servicios": [servicio_id]  # ✅ ID del servicio
+        "user": empleado,  # ✅ ID del empleado en formato objeto
+        "created_by": empleado,
+        "cliente": cliente_id,  # ✅ ID del cliente en formato objeto
+        "estado": {"value": 1, "text": "Programada"},
+        "servicios": [servicio]  # ✅ ID del servicio en formato objeto
     }
 
     print(f"📩 Enviando cita a Koibox: {datos_cita}")  # DEBUG
@@ -157,11 +157,6 @@ def webhook():
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_hora", ex=600)
         respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
-
-    elif redis_client.get(sender + "_estado") == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
-        respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
 
     elif redis_client.get(sender + "_estado") == "esperando_servicio":
         cliente_id = buscar_cliente(redis_client.get(sender + "_telefono")) or crear_cliente(
