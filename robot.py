@@ -1,7 +1,7 @@
 import os
 import requests
 import json
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
 # Configuración de Flask
@@ -15,6 +15,15 @@ TABLE_NAME = "tblhdHTMAwFxBxJly"  # ID de la tabla de clientes
 HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
+}
+
+# Información de Sonrisas Hollywood y Albane Clinic
+INFO_CLINICA = {
+    "horarios": "Estamos abiertos de lunes a viernes de 10:00 a 20:00 y sábados de 10:00 a 14:00.",
+    "botox": "El tratamiento de Botox cuesta 7€ por unidad y se realiza en sesiones rápidas con resultados visibles en pocos días.",
+    "diseño de sonrisa": "El diseño de sonrisa se realiza con carillas de composite o porcelana. El ticket medio es de 2.500€.",
+    "ortodoncia": "Trabajamos con Invisalign para ortodoncia invisible. Resultados óptimos con máxima comodidad.",
+    "medicina estética": "Ofrecemos tratamientos como rellenos con ácido hialurónico, lifting Radiesse, hilos tensores y más."
 }
 
 # Función para buscar si un cliente ya existe en Airtable
@@ -76,6 +85,12 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
 
+    # Respuestas a preguntas frecuentes
+    if incoming_msg in INFO_CLINICA:
+        msg.body(INFO_CLINICA[incoming_msg])
+        return str(resp)
+
+    # Flujo de agendamiento de citas
     if "cita" in incoming_msg or "agendar" in incoming_msg:
         msg.body("¡Hola! 😊 Para agendar una cita, dime tu nombre completo.")
         return str(resp)
