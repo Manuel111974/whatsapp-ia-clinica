@@ -1,7 +1,7 @@
 import os
 import redis
 import requests
-import json
+import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -21,56 +21,54 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID del asistente en Koibox
+# ID del empleado "Gabriel Asistente IA" en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # Diccionario de servicios en Koibox (⚠️ Reemplazar con los IDs reales)
 SERVICIOS_DISPONIBLES = {
-    "botox": 2,
-    "diseño de sonrisa": 3,
+    "botox": 2,  # ID del servicio de Botox
+    "diseño de sonrisa": 3,  # ID del servicio de Diseño de Sonrisa
     "ortodoncia": 4
 }
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
-    url = f"{KOIBOX_URL}/clientes/?movil={telefono}"  # Filtro por teléfono
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=5)
-        response.raise_for_status()  # Levanta un error si el código no es 200
+    url = f"{KOIBOX_URL}/clientes/"
+    while url:
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code == 200:
+            clientes_data = response.json()
+            for cliente in clientes_data.get("results", []):
+                if cliente.get("movil") == telefono:
+                    return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
+            url = clientes_data.get("next")  # Paginación
+        else:
+            print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+            return None
+    return None
 
-        clientes_data = response.json()
-        print(f"📩 [DEBUG] Respuesta de Koibox buscar_cliente: {json.dumps(clientes_data, indent=2)}")
-
-        if clientes_data.get("results"):
-            cliente = clientes_data["results"][0]  # Tomamos el primer resultado
-            return cliente["id"]  # Devuelve el ID del cliente si lo encuentra
-
-        return None  # No se encontró el cliente
-
-    except requests.exceptions.RequestException as e:
-        print(f"❌ [ERROR] buscar_cliente - {e}")
-        return None
-
-# 🆕 **Crear cliente en Koibox**
+# 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
         "is_anonymous": False
     }
-
-    try:
-        response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente, timeout=5)
-        response.raise_for_status()
-
+    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+    
+    if response.status_code == 201:
         cliente_data = response.json()
-        print(f"✅ [DEBUG] Cliente creado en Koibox: {json.dumps(cliente_data, indent=2)}")
-
+        print(f"✅ Cliente creado en Koibox: {cliente_data}")
         return cliente_data.get("id")  # Devuelve el ID del cliente recién creado
-
-    except requests.exceptions.RequestException as e:
-        print(f"❌ [ERROR] crear_cliente - {e}")
+    else:
+        print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
+
+# ⏰ **Función para calcular la hora de finalización**
+def calcular_hora_fin(hora_inicio, duracion_horas):
+    h, m = map(int, hora_inicio.split(":"))
+    h += duracion_horas
+    return f"{h:02d}:{m:02d}"
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, fecha, hora, servicio_id):
@@ -80,7 +78,7 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
         "duration": "01:00",
         "fecha": fecha,
         "hora_inicio": hora,
-        "hora_fin": "00:00",  # Se recalculará automáticamente
+        "hora_fin": calcular_hora_fin(hora, 1),
         "is_empleado_aleatorio": False,
         "is_notificada_por_sms": True,
         "is_notificada_por_email": True,
@@ -97,16 +95,14 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
         "servicios": [servicio_id]
     }
 
-    try:
-        response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita, timeout=5)
-        response.raise_for_status()
+    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
 
-        print(f"✅ [DEBUG] Cita creada en Koibox: {json.dumps(response.json(), indent=2)}")
+    if response.status_code == 201:
+        print(f"✅ Cita creada con éxito: {response.json()}")
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
-
-    except requests.exceptions.RequestException as e:
-        print(f"❌ [ERROR] crear_cita - {e}")
-        return False, "⚠️ No se pudo agendar la cita. Intenta más tarde."
+    else:
+        print(f"❌ Error creando cita en Koibox: {response.text}")
+        return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # 📩 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
@@ -152,15 +148,21 @@ def webhook():
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
-        servicio_id = SERVICIOS_DISPONIBLES.get(incoming_msg, None)
+        servicio = redis_client.get(sender + "_servicio")
 
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-
-        if cliente_id and servicio_id:
-            _, mensaje = crear_cita(cliente_id, fecha, hora, servicio_id)
-            respuesta = mensaje
+        servicio_id = SERVICIOS_DISPONIBLES.get(servicio, None)
+        if not servicio_id:
+            respuesta = f"⚠️ Lo siento, pero no tengo registrado ese servicio. ¿Podrías intentar de nuevo?"
         else:
-            respuesta = "❌ Error: No se pudo crear la cita."
+            cliente_id = buscar_cliente(telefono)
+            if not cliente_id:
+                cliente_id = crear_cliente(nombre, telefono)
+
+            if cliente_id:
+                exito, mensaje = crear_cita(cliente_id, fecha, hora, servicio_id)
+                respuesta = mensaje
+            else:
+                respuesta = "No pude registrar tu cita. Intenta más tarde."
 
     msg.body(respuesta)
     return str(resp)
