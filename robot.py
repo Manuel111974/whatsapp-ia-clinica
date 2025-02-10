@@ -8,11 +8,11 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis para la memoria temporal de Gabriel
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI
+# Configuración de OpenAI (GPT-4 Turbo)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configuración de Koibox API
@@ -24,19 +24,20 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🧠 **Función para generar respuestas con IA**
+# 🧠 **Función para generar respuestas inteligentes con OpenAI**
 def generar_respuesta(mensaje_usuario, historial):
     prompt = f"""
-    Eres Gabriel, el asistente virtual de Sonrisas Hollywood.
-    Tu trabajo es responder de forma profesional y natural sobre los servicios de odontología estética.
-    También puedes ayudar a reservar citas si el usuario lo solicita.
+    Eres Gabriel, el asistente virtual de Sonrisas Hollywood. 
+    Eres un experto en odontología estética y agendamiento de citas. 
+    Siempre respondes de manera clara, amigable y profesional.
 
-    Historia de la conversación:
+    Contexto de la conversación:
     {historial}
 
     Usuario: {mensaje_usuario}
     Gabriel:
     """
+
     try:
         respuesta_openai = openai.ChatCompletion.create(
             model="gpt-4-turbo",
@@ -49,9 +50,9 @@ def generar_respuesta(mensaje_usuario, historial):
         print(f"Error con OpenAI: {e}")
         return "Lo siento, hubo un problema. ¿Puedes repetir tu consulta?"
 
-# 🔍 **Función para buscar cliente en Koibox**
+# 🔍 **Función para buscar un cliente en Koibox**
 def buscar_cliente(telefono):
-    telefono = "".join(filter(str.isdigit, telefono))[:16]
+    telefono = "".join(filter(str.isdigit, telefono))[:16]  # Sanitizar el número
     try:
         response = requests.get(f"{KOIBOX_URL}/clientes/?movil={telefono}", headers=HEADERS)
         if response.status_code == 200:
@@ -63,7 +64,7 @@ def buscar_cliente(telefono):
         print(f"Error buscando cliente en Koibox: {e}")
         return None
 
-# 📝 **Función para crear cliente en Koibox**
+# 📝 **Función para crear un cliente en Koibox**
 def crear_cliente(nombre, telefono):
     telefono = "".join(filter(str.isdigit, telefono))[:16]
     datos_cliente = {"nombre": nombre, "movil": telefono}
@@ -78,7 +79,7 @@ def crear_cliente(nombre, telefono):
         print(f"Error creando cliente en Koibox: {e}")
         return None
 
-# 📅 **Función para agendar cita en Koibox**
+# 📅 **Función para agendar una cita en Koibox**
 def agendar_cita(cliente_id, fecha, hora, servicio_id=1):
     datos_cita = {
         "cliente": cliente_id,
@@ -114,31 +115,31 @@ def webhook():
 
     # 🦷 **Flujo de agendamiento de citas**
     if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+        redis_client.set(sender + "_estado", "esperando_nombre", ex=1800)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
     elif estado_usuario == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
+        redis_client.set(sender + "_nombre", incoming_msg, ex=1800)
+        redis_client.set(sender + "_estado", "esperando_telefono", ex=1800)
         respuesta = f"Gracias, {incoming_msg} 😊. Ahora dime tu número de teléfono 📞."
 
     elif estado_usuario == "esperando_telefono":
-        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        redis_client.set(sender + "_telefono", incoming_msg, ex=1800)
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=1800)
         respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '12/02/2025')"
 
     elif estado_usuario == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        redis_client.set(sender + "_fecha", incoming_msg, ex=1800)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=1800)
         respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
 
     elif estado_usuario == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
+        redis_client.set(sender + "_hora", incoming_msg, ex=1800)
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=1800)
         respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
 
     elif estado_usuario == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+        redis_client.set(sender + "_servicio", incoming_msg, ex=1800)
 
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
@@ -160,7 +161,7 @@ def webhook():
                 respuesta = "❌ Hubo un problema al registrar tu información. ¿Podrías intentarlo otra vez?"
         else:
             respuesta = "❌ Faltan datos. Vamos a empezar de nuevo. ¿Cuál es tu nombre? 😊"
-            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+            redis_client.set(sender + "_estado", "esperando_nombre", ex=1800)
 
     else:
         respuesta = generar_respuesta(incoming_msg, historial)
@@ -169,11 +170,6 @@ def webhook():
     redis_client.set(sender, historial + f"\nUsuario: {incoming_msg}\nGabriel: {respuesta}", ex=3600)
 
     return str(resp)
-
-# **Ruta principal**
-@app.route("/")
-def home():
-    return "✅ Gabriel está activo y funcionando correctamente."
 
 # **Ejecutar aplicación Flask**
 if __name__ == "__main__":
