@@ -1,7 +1,6 @@
 import os
 import redis
 import requests
-import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -21,7 +20,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔍 **Buscar el ID del empleado "Gabriel Asistente IA" en Koibox**
+# 🔍 **Obtener ID del empleado "Gabriel Asistente IA" en Koibox**
 def obtener_id_empleado():
     url = f"{KOIBOX_URL}/empleados/"
     response = requests.get(url, headers=HEADERS)
@@ -29,13 +28,14 @@ def obtener_id_empleado():
     if response.status_code == 200:
         empleados = response.json().get("results", [])
         for empleado in empleados:
+            print(f"🔍 Verificando empleado: {empleado}")
             if empleado.get("text").strip().lower() == "gabriel asistente ia":
-                print(f"✅ ID de Gabriel encontrado: {empleado.get('id')}")
+                print(f"✅ Empleado 'Gabriel Asistente IA' encontrado: {empleado.get('id')}")
                 return {"value": empleado.get("id"), "text": empleado.get("text")}
     print("❌ No se encontró el empleado 'Gabriel Asistente IA'.")
     return None
 
-# 🔍 **Buscar el ID del servicio en Koibox**
+# 🔍 **Obtener ID del servicio en Koibox**
 def obtener_id_servicio(nombre_servicio):
     url = f"{KOIBOX_URL}/servicios/"
     response = requests.get(url, headers=HEADERS)
@@ -43,6 +43,7 @@ def obtener_id_servicio(nombre_servicio):
     if response.status_code == 200:
         servicios = response.json().get("results", [])
         for servicio in servicios:
+            print(f"🔍 Verificando servicio: {servicio}")
             if servicio.get("text").strip().lower() == nombre_servicio.strip().lower():
                 print(f"✅ Servicio encontrado: {servicio}")
                 return {"value": servicio.get("id"), "text": servicio.get("text")}
@@ -57,6 +58,7 @@ def buscar_cliente(telefono):
     if response.status_code == 200:
         clientes_data = response.json()
         for cliente in clientes_data.get("results", []):
+            print(f"🔍 Verificando cliente: {cliente}")
             if cliente.get("movil") == telefono:
                 print(f"✅ Cliente encontrado: {cliente}")
                 return {"value": cliente.get("id"), "text": cliente.get("nombre")}
