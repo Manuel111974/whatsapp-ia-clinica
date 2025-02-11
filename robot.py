@@ -55,6 +55,7 @@ def crear_cliente(nombre, telefono):
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
+        "email": f"{telefono}@noemail.com",  # Koibox suele requerir email, usamos un placeholder
         "is_anonymous": False
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
