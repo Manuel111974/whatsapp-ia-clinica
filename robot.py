@@ -22,7 +22,7 @@ HEADERS = {
 }
 
 # 📌 ID del empleado "Gabriel Asistente IA"
-GABRIEL_USER_ID = 1  
+GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID real de Gabriel en Koibox
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -33,8 +33,8 @@ def buscar_cliente(telefono):
         clientes = response.json().get("results", [])
         for cliente in clientes:
             if cliente.get("movil") == telefono:
-                return cliente.get("id")  
-    return None  
+                return cliente.get("id"), cliente.get("nombre")  # Retornamos ID y nombre
+    return None, None  
 
 # 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
@@ -45,7 +45,10 @@ def crear_cliente(nombre, telefono):
     }
     response = requests.post(f"https://api.koibox.cloud/api/clientes/", headers=HEADERS, json=datos_cliente)
     
-    return response.json().get("id") if response.status_code == 201 else None
+    if response.status_code == 201:
+        cliente_info = response.json()
+        return cliente_info.get("id"), cliente_info.get("nombre")  # Retornamos ID y nombre
+    return None, None
 
 # 📄 **Obtener lista de servicios desde Koibox**
 def obtener_servicios():
@@ -67,7 +70,7 @@ def encontrar_servicio_mas_parecido(servicio_solicitado):
     return (servicios[mejor_match], f"Se ha seleccionado: {mejor_match}") if score > 75 else (None, "No encontré un servicio similar.")
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, fecha, hora, servicio_solicitado):
+def crear_cita(cliente_id, cliente_nombre, fecha, hora, servicio_solicitado):
     servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
     
     if not servicio_id:
@@ -79,8 +82,8 @@ def crear_cita(cliente_id, fecha, hora, servicio_solicitado):
         "hora_fin": calcular_hora_fin(hora, 1),
         "titulo": servicio_solicitado,
         "notas": "Cita agendada por Gabriel (IA)",
-        "user": {"value": GABRIEL_USER_ID},
-        "cliente": {"value": cliente_id},
+        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},  # Asignamos explícitamente el empleado
+        "cliente": {"value": cliente_id, "text": cliente_nombre},  # Enviamos ID y nombre
         "servicios": [{"id": servicio_id, "value": servicio_id, "text": servicio_solicitado}],
         "estado": {"id": 1, "value": 1, "nombre": "Confirmado"}
     }
@@ -143,8 +146,11 @@ def webhook():
         hora = redis_client.get(sender + "_hora")
         servicio = redis_client.get(sender + "_servicio")
 
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-        exito, mensaje = crear_cita(cliente_id, fecha, hora, servicio) if cliente_id else (False, "No pude registrar tu cita.")
+        cliente_id, cliente_nombre = buscar_cliente(telefono)
+        if not cliente_id:
+            cliente_id, cliente_nombre = crear_cliente(nombre, telefono)
+
+        exito, mensaje = crear_cita(cliente_id, cliente_nombre, fecha, hora, servicio) if cliente_id else (False, "No pude registrar tu cita.")
 
         respuesta = mensaje
 
