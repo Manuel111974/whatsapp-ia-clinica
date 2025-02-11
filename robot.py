@@ -61,7 +61,7 @@ def crear_cliente(nombre, telefono):
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
 
-# 📆 **Crear cita en Koibox**
+# 📆 **Crear cita en Koibox (Con depuración de errores)**
 def crear_cita(cliente_id, fecha, hora, servicio_id):
     datos_cita = {
         "fecha": fecha,
@@ -79,6 +79,7 @@ def crear_cita(cliente_id, fecha, hora, servicio_id):
     if response.status_code == 201:
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
+        print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Función para calcular la hora de finalización**
@@ -141,7 +142,7 @@ def webhook():
         if not cliente_id:
             cliente_id = crear_cliente(nombre, telefono)
 
-        # Crear cita
+        # Crear cita y mostrar error detallado en logs
         if cliente_id:
             exito, mensaje = crear_cita(cliente_id, fecha, hora, 1)  # ID del servicio
             respuesta = mensaje
