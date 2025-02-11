@@ -39,11 +39,9 @@ def buscar_cliente(telefono):
 
     if response.status_code == 200:
         clientes_data = response.json()
-        if "results" in clientes_data:
-            for cliente in clientes_data["results"]:
-                if normalizar_telefono(cliente.get("movil")) == telefono:
-                    return cliente.get("value")  # Devolver el ID correcto
-        return None
+        for cliente in clientes_data.get("results", []):
+            if normalizar_telefono(cliente.get("movil")) == telefono:
+                return cliente.get("value")  # ID correcto del cliente
     return None
 
 # 🆕 **Crear cliente en Koibox si no existe**
@@ -64,18 +62,27 @@ def obtener_servicios():
     if response.status_code == 200:
         servicios_data = response.json()
         if "results" in servicios_data:
-            return {s["text"].lower(): s["value"] for s in servicios_data["results"] if s["is_active"]}
+            servicios = {s["text"].lower(): s["value"] for s in servicios_data["results"] if s["is_active"]}
+            print(f"✅ Servicios obtenidos de Koibox: {servicios}")  # Debugging
+            return servicios
+
+    print(f"❌ No se pudieron obtener los servicios: {response.text}")  # Debugging
     return {}
 
 # 🔍 **Seleccionar el servicio más parecido**
 def encontrar_servicio_mas_parecido(servicio_solicitado):
     servicios = obtener_servicios()
+
     if not servicios:
-        return None, "No se encontraron servicios disponibles."
+        return None, "No se encontraron servicios disponibles en Koibox."
 
     mejor_match, score, _ = process.extractOne(servicio_solicitado.lower(), servicios.keys())
+
     if score > 75:
+        print(f"✅ Servicio encontrado: {mejor_match} (ID {servicios[mejor_match]})")  # Debugging
         return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
+    
+    print("❌ No se encontró un servicio similar en la lista.")  # Debugging
     return None, "No encontré un servicio similar."
 
 # 📆 **Crear cita en Koibox**
@@ -167,7 +174,7 @@ def webhook():
             exito, mensaje = False, "No pude registrar tu cita porque no se pudo crear el cliente."
 
         respuesta = mensaje
-        redis_client.delete(sender + "_estado")  # 🔹 Limpieza del estado tras finalizar
+        redis_client.delete(sender + "_estado")
 
     msg.body(respuesta)
     return str(resp)
