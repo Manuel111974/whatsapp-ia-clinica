@@ -1,10 +1,9 @@
 import os
 import redis
 import requests
-import openai
+from rapidfuzz import process  # 🔹 Alternativa más rápida y sin dependencias problemáticas
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from fuzzywuzzy import process  # 🔹 Para comparar tratamientos con fuzzy matching
 
 # 📌 Configuración de Flask
 app = Flask(__name__)
@@ -22,37 +21,8 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 📌 ID del empleado "Gabriel Asistente IA" en Koibox
-GABRIEL_USER_ID = 23527  # ⚠️ REEMPLAZAR CON EL ID REAL
-
-# 🔍 **Obtener lista de servicios disponibles en Koibox**
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        try:
-            servicios_data = response.json()
-            if "results" in servicios_data and isinstance(servicios_data["results"], list):
-                return {servicio["nombre"].lower(): servicio["id"] for servicio in servicios_data["results"]}
-        except Exception as e:
-            print(f"❌ Error procesando la respuesta de Koibox (Servicios): {e}")
-    else:
-        print(f"❌ Error al obtener servicios de Koibox: {response.text}")
-
-    return {}
-
-# Cargar los servicios disponibles en Koibox
-SERVICIOS_DISPONIBLES = obtener_servicios()
-
-# 🔍 **Buscar el servicio más similar al ingresado por el cliente**
-def encontrar_servicio_mas_parecido(nombre_servicio):
-    mejor_coincidencia, similitud = process.extractOne(nombre_servicio.lower(), SERVICIOS_DISPONIBLES.keys())
-
-    if similitud > 70:  # Si la coincidencia es superior al 70%, lo usamos
-        return mejor_coincidencia, SERVICIOS_DISPONIBLES[mejor_coincidencia]
-    else:
-        return "Primera Visita", SERVICIOS_DISPONIBLES.get("primera visita", None)
+# 📌 ID del empleado "Gabriel Asistente IA" en Koibox (REEMPLAZAR SI ES NECESARIO)
+GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -66,13 +36,16 @@ def buscar_cliente(telefono):
                 clientes = clientes_data["results"]
                 for cliente in clientes:
                     if cliente.get("movil") == telefono:
-                        return cliente.get("id")
+                        return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
+            else:
+                print(f"⚠️ Estructura inesperada en la respuesta de Koibox: {clientes_data}")
+                return None
         except Exception as e:
-            print(f"❌ Error procesando la respuesta de Koibox (Clientes): {e}")
+            print(f"❌ Error procesando la respuesta de Koibox: {e}")
+            return None
     else:
         print(f"❌ Error al obtener clientes de Koibox: {response.text}")
-
-    return None  # Si no encuentra el cliente, retorna None
+        return None
 
 # 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
@@ -89,39 +62,60 @@ def crear_cliente(nombre, telefono):
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
 
+# 📄 **Obtener lista de servicios desde Koibox**
+def obtener_servicios():
+    url = f"{KOIBOX_URL}/servicios/"
+    response = requests.get(url, headers=HEADERS)
+    
+    if response.status_code == 200:
+        try:
+            servicios_data = response.json()
+            if "results" in servicios_data and isinstance(servicios_data["results"], list):
+                return {s["nombre"]: s["id"] for s in servicios_data["results"]}
+        except Exception as e:
+            print(f"❌ Error procesando la respuesta de servicios Koibox: {e}")
+            return {}
+    else:
+        print(f"❌ Error al obtener servicios de Koibox: {response.text}")
+        return {}
+
+# 🔍 **Seleccionar el servicio más parecido al solicitado**
+def encontrar_servicio_mas_parecido(servicio_solicitado):
+    servicios = obtener_servicios()
+    if not servicios:
+        return None, "No se encontraron servicios disponibles."
+    
+    mejor_match, score, id_servicio = process.extractOne(servicio_solicitado, servicios.keys())
+    
+    if score > 75:  # Ajustar el umbral de similitud si es necesario
+        return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
+    
+    return None, "No encontré un servicio similar. ¿Podrías reformularlo?"
+
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, fecha, hora, servicio_nombre):
-    # ✅ Convertir fecha al formato correcto (YYYY-MM-DD)
-    try:
-        fecha_formateada = "-".join(reversed(fecha.split("/")))  # Convierte 'DD/MM/YYYY' a 'YYYY-MM-DD'
-    except Exception as e:
-        print(f"❌ Error formateando la fecha: {e}")
-        return False, "⚠️ La fecha ingresada no es válida. Usa el formato DD/MM/YYYY."
-
-    # ✅ Buscar el servicio más parecido
-    servicio_encontrado, servicio_id = encontrar_servicio_mas_parecido(servicio_nombre)
-
+def crear_cita(cliente_id, fecha, hora, servicio_solicitado):
+    servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
+    
     if not servicio_id:
-        return False, "⚠️ No encontramos un servicio similar. Se ha asignado una 'Primera Visita'."
+        return False, mensaje
 
     datos_cita = {
-        "titulo": f"Cita para {servicio_encontrado}",  # ✅ Se agregó un título obligatorio
-        "fecha": fecha_formateada,
+        "fecha": fecha,
         "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),  # Duración de 1 hora
+        "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
+        "titulo": servicio_solicitado,
         "notas": "Cita agendada por Gabriel (IA)",
-        "user": GABRIEL_USER_ID,  # ✅ ID directo
-        "cliente": cliente_id,  # ✅ ID directo
-        "servicios": [servicio_id],  # ✅ ID en lista
-        "estado": 1  # ✅ Estado programado
+        "user": GABRIEL_USER_ID,  # Ajustado al formato requerido
+        "cliente": cliente_id,
+        "servicios": [servicio_id],
+        "estado": 1  # Ajustado al formato requerido
     }
-
+    
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-
+    
     if response.status_code == 201:
-        return True, f"✅ ¡Tu cita para {servicio_encontrado} ha sido creada con éxito!"
+        return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
-        print(f"❌ Error al agendar la cita: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Función para calcular la hora de finalización**
@@ -141,6 +135,9 @@ def webhook():
     msg = resp.message()
     respuesta = "No entendí tu mensaje. ¿Puedes reformularlo? 😊"
 
+    # Obtener historial del usuario en Redis
+    historial = redis_client.get(sender) or ""
+
     # **Flujo de citas**
     if "cita" in incoming_msg or "reservar" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
@@ -154,7 +151,7 @@ def webhook():
     elif redis_client.get(sender + "_estado") == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '12/02/2025')"
+        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-12')"
 
     elif redis_client.get(sender + "_estado") == "esperando_fecha":
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
@@ -167,7 +164,17 @@ def webhook():
         respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
 
     elif redis_client.get(sender + "_estado") == "esperando_servicio":
-        exito, mensaje = crear_cita(buscar_cliente(redis_client.get(sender + "_telefono")), redis_client.get(sender + "_fecha"), redis_client.get(sender + "_hora"), redis_client.get(sender + "_servicio"))
+        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+        servicio = redis_client.get(sender + "_servicio")
+
+        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+        exito, mensaje = crear_cita(cliente_id, fecha, hora, servicio) if cliente_id else (False, "No pude registrar tu cita.")
+
         respuesta = mensaje
 
     msg.body(respuesta)
