@@ -27,7 +27,7 @@ GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR SI ES NECESARIO
 # 📌 Normalizar formato del teléfono
 def normalizar_telefono(telefono):
     telefono = telefono.strip().replace(" ", "").replace("-", "")
-    if not telefono.startswith("+34"):  # Ajustar según el país
+    if not telefono.startswith("+34"):
         telefono = "+34" + telefono
     return telefono
 
@@ -139,29 +139,13 @@ def webhook():
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
-    elif estado == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        respuesta = f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞."
-
-    elif estado == "esperando_telefono":
-        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-12')"
-
-    elif estado == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
-
-    elif estado == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
-        respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox') 💉."
-
     elif estado == "esperando_servicio":
         redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-        respuesta = "Un momento, estoy buscando el servicio…"
+
+        servicio = redis_client.get(sender + "_servicio")
+        print(f"📩 Servicio recibido del usuario: {servicio}")
+
+        respuesta = "Estoy procesando tu solicitud de cita..."
 
     msg.body(respuesta)
     return str(resp)
