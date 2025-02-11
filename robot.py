@@ -21,8 +21,8 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 📌 ID del empleado "Gabriel Asistente IA" en Koibox (REEMPLAZAR SI ES NECESARIO)
-GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
+# 📌 ID del empleado "Gabriel Asistente IA" en Koibox (Asegúrate de reemplazarlo con el ID real)
+GABRIEL_USER_ID = 23527  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -32,8 +32,6 @@ def buscar_cliente(telefono):
     if response.status_code == 200:
         try:
             clientes_data = response.json()
-
-            # ✅ Adaptar a la nueva estructura de respuesta de Koibox
             if "results" in clientes_data and isinstance(clientes_data["results"], list):
                 clientes = clientes_data["results"]
                 for cliente in clientes:
@@ -68,19 +66,23 @@ def crear_cliente(nombre, telefono):
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, fecha, hora, servicio_id):
+    # ✅ Convertir fecha al formato correcto
+    fecha_formateada = "-".join(reversed(fecha.split("/")))  # Convierte 'DD/MM/YYYY' a 'YYYY-MM-DD'
+
     datos_cita = {
-        "fecha": fecha,
+        "titulo": "Cita de tratamiento",  # ✅ Se agregó un título obligatorio
+        "fecha": fecha_formateada,
         "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
+        "hora_fin": calcular_hora_fin(hora, 1),  # Duración de 1 hora
         "notas": "Cita agendada por Gabriel (IA)",
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id},
-        "servicios": [{"value": servicio_id}],
-        "estado": {"value": 1, "text": "Programada"}
+        "user": GABRIEL_USER_ID,  # ✅ Ahora es un ID, no un diccionario
+        "cliente": cliente_id,  # ✅ Ahora es un ID, no un diccionario
+        "servicios": [servicio_id],  # ✅ Ahora es un ID en lista, no un diccionario
+        "estado": 1  # ✅ Estado programado
     }
-    
+
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-    
+
     if response.status_code == 201:
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
