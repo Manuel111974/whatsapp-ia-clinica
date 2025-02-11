@@ -140,29 +140,35 @@ def webhook():
 
     estado = redis_client.get(sender + "_estado")
 
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
+    if estado is None:
+        estado = "inicio"
+        redis_client.set(sender + "_estado", estado)
+
+    print(f"📢 Estado actual del usuario: {estado}")
+
+    if estado == "inicio":
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         respuesta = "¡Genial! Primero dime tu nombre completo 😊."
 
-    elif estado == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+    elif estado == "esperando_nombre":
+        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
+        respuesta = f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞."
 
-        servicio = redis_client.get(sender + "_servicio")
-        print(f"📩 Servicio recibido del usuario: {servicio}")
+    elif estado == "esperando_telefono":
+        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        respuesta = "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-12')"
 
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
+    elif estado == "esperando_fecha":
+        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        respuesta = "Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '16:00')"
 
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-
-        if cliente_id:
-            exito, mensaje = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio)
-        else:
-            exito, mensaje = False, "No pude registrar tu cita porque no se pudo crear el cliente."
-
-        respuesta = mensaje
+    elif estado == "esperando_hora":
+        redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
+        respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox') 💉."
 
     msg.body(respuesta)
     return str(resp)
