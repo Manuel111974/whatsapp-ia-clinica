@@ -4,6 +4,7 @@ import requests
 import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+from fuzzywuzzy import process  # 🔹 Para comparar tratamientos con fuzzy matching
 
 # 📌 Configuración de Flask
 app = Flask(__name__)
@@ -21,7 +22,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 📌 ID del empleado "Gabriel Asistente IA" en Koibox (Asegúrate de reemplazarlo con el ID real)
+# 📌 ID del empleado "Gabriel Asistente IA" en Koibox
 GABRIEL_USER_ID = 23527  # ⚠️ REEMPLAZAR CON EL ID REAL
 
 # 🔍 **Obtener lista de servicios disponibles en Koibox**
@@ -36,13 +37,22 @@ def obtener_servicios():
                 return {servicio["nombre"].lower(): servicio["id"] for servicio in servicios_data["results"]}
         except Exception as e:
             print(f"❌ Error procesando la respuesta de Koibox (Servicios): {e}")
-            return {}
     else:
         print(f"❌ Error al obtener servicios de Koibox: {response.text}")
-        return {}
+
+    return {}
 
 # Cargar los servicios disponibles en Koibox
 SERVICIOS_DISPONIBLES = obtener_servicios()
+
+# 🔍 **Buscar el servicio más similar al ingresado por el cliente**
+def encontrar_servicio_mas_parecido(nombre_servicio):
+    mejor_coincidencia, similitud = process.extractOne(nombre_servicio.lower(), SERVICIOS_DISPONIBLES.keys())
+
+    if similitud > 70:  # Si la coincidencia es superior al 70%, lo usamos
+        return mejor_coincidencia, SERVICIOS_DISPONIBLES[mejor_coincidencia]
+    else:
+        return "Primera Visita", SERVICIOS_DISPONIBLES.get("primera visita", None)
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -56,7 +66,7 @@ def buscar_cliente(telefono):
                 clientes = clientes_data["results"]
                 for cliente in clientes:
                     if cliente.get("movil") == telefono:
-                        return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
+                        return cliente.get("id")
         except Exception as e:
             print(f"❌ Error procesando la respuesta de Koibox (Clientes): {e}")
     else:
@@ -81,34 +91,35 @@ def crear_cliente(nombre, telefono):
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, fecha, hora, servicio_nombre):
-    # ✅ Convertir fecha al formato correcto
+    # ✅ Convertir fecha al formato correcto (YYYY-MM-DD)
     try:
         fecha_formateada = "-".join(reversed(fecha.split("/")))  # Convierte 'DD/MM/YYYY' a 'YYYY-MM-DD'
     except Exception as e:
         print(f"❌ Error formateando la fecha: {e}")
-        return False, "⚠️ La fecha ingresada no es válida. Por favor usa el formato DD/MM/YYYY."
+        return False, "⚠️ La fecha ingresada no es válida. Usa el formato DD/MM/YYYY."
 
-    # ✅ Obtener el ID del servicio
-    servicio_id = SERVICIOS_DISPONIBLES.get(servicio_nombre.lower())
+    # ✅ Buscar el servicio más parecido
+    servicio_encontrado, servicio_id = encontrar_servicio_mas_parecido(servicio_nombre)
+
     if not servicio_id:
-        return False, "⚠️ No encontramos ese tratamiento en nuestro sistema. Por favor, elige otro."
+        return False, "⚠️ No encontramos un servicio similar. Se ha asignado una 'Primera Visita'."
 
     datos_cita = {
-        "titulo": f"Cita para {servicio_nombre}",  # ✅ Se agregó un título obligatorio
+        "titulo": f"Cita para {servicio_encontrado}",  # ✅ Se agregó un título obligatorio
         "fecha": fecha_formateada,
         "hora_inicio": hora,
         "hora_fin": calcular_hora_fin(hora, 1),  # Duración de 1 hora
         "notas": "Cita agendada por Gabriel (IA)",
-        "user": GABRIEL_USER_ID,  # ✅ Ahora es un ID, no un diccionario
-        "cliente": cliente_id,  # ✅ Ahora es un ID, no un diccionario
-        "servicios": [servicio_id],  # ✅ Ahora es un ID en lista, no un diccionario
+        "user": GABRIEL_USER_ID,  # ✅ ID directo
+        "cliente": cliente_id,  # ✅ ID directo
+        "servicios": [servicio_id],  # ✅ ID en lista
         "estado": 1  # ✅ Estado programado
     }
 
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
 
     if response.status_code == 201:
-        return True, "✅ ¡Tu cita ha sido creada con éxito!"
+        return True, f"✅ ¡Tu cita para {servicio_encontrado} ha sido creada con éxito!"
     else:
         print(f"❌ Error al agendar la cita: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
@@ -156,16 +167,7 @@ def webhook():
         respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
 
     elif redis_client.get(sender + "_estado") == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-
-        # Crear cita
-        exito, mensaje = crear_cita(
-            buscar_cliente(redis_client.get(sender + "_telefono")) or 
-            crear_cliente(redis_client.get(sender + "_nombre"), redis_client.get(sender + "_telefono")),
-            redis_client.get(sender + "_fecha"),
-            redis_client.get(sender + "_hora"),
-            redis_client.get(sender + "_servicio")
-        )
+        exito, mensaje = crear_cita(buscar_cliente(redis_client.get(sender + "_telefono")), redis_client.get(sender + "_fecha"), redis_client.get(sender + "_hora"), redis_client.get(sender + "_servicio"))
         respuesta = mensaje
 
     msg.body(respuesta)
