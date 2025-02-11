@@ -26,7 +26,7 @@ GABRIEL_USER_ID = 1
 # 📌 Normalizar formato del teléfono
 def normalizar_telefono(telefono):
     telefono = telefono.strip().replace(" ", "").replace("-", "")
-    if not telefono.startswith("+34"):  # Ajustar según el país
+    if not telefono.startswith("+34"):
         telefono = "+34" + telefono
     return telefono
 
@@ -38,11 +38,10 @@ def buscar_cliente(telefono):
 
     if response.status_code == 200:
         clientes_data = response.json()
-        print(f"📢 Respuesta de Koibox (clientes): {clientes_data}")  # Log para depuración
         if "results" in clientes_data and isinstance(clientes_data["results"], list):
             for cliente in clientes_data["results"]:
                 if normalizar_telefono(cliente.get("movil")) == telefono:
-                    return cliente.get("id")  # Devolver el ID si se encuentra
+                    return cliente.get("id")  
         return None
     else:
         print(f"❌ Error al obtener clientes de Koibox: {response.text}")
@@ -59,7 +58,6 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     
     if response.status_code == 201:
-        print(f"✅ Cliente creado correctamente: {response.json()}")
         return response.json().get("id")
     else:
         print(f"❌ Error creando cliente en Koibox: {response.text}")
@@ -69,17 +67,23 @@ def crear_cliente(nombre, telefono):
 def obtener_servicios():
     url = f"{KOIBOX_URL}/servicios/"
     response = requests.get(url, headers=HEADERS)
-    
+
     if response.status_code == 200:
         servicios_data = response.json()
         if "results" in servicios_data and isinstance(servicios_data["results"], list):
             return {s["nombre"]: s["id"] for s in servicios_data["results"]}
-    print(f"❌ Error al obtener servicios de Koibox: {response.text}")
+    else:
+        print(f"❌ Error al obtener servicios de Koibox: {response.text}")
+        print(f"🔴 Respuesta de Koibox: {response.content}")  # 🔍 Mostrar respuesta cruda
+
     return {}
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     servicios = obtener_servicios()
+
+    if not servicios:
+        return False, "⚠️ No pude obtener la lista de servicios. Inténtalo más tarde."
 
     if servicio_solicitado not in servicios:
         return False, f"⚠️ No encontré el servicio '{servicio_solicitado}', intenta con otro nombre."
@@ -165,8 +169,6 @@ def webhook():
             hora = redis_client.get(sender + "_hora")
             servicio = redis_client.get(sender + "_servicio")
 
-            print(f"👤 Cliente: {nombre} | ☎️ Teléfono: {telefono} | 📅 Fecha: {fecha} | ⏰ Hora: {hora} | 🏥 Servicio: {servicio}")
-
             cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
 
             if cliente_id:
@@ -175,7 +177,7 @@ def webhook():
                 exito, mensaje = False, "No pude registrar tu cita porque no se pudo crear el cliente."
 
             msg.body(mensaje)
-            redis_client.delete(sender + "_estado")  # Reseteamos la conversación
+            redis_client.delete(sender + "_estado")
 
         return str(resp)
 
