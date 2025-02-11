@@ -29,26 +29,25 @@ def buscar_cliente(telefono):
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
 
-    # 🔹 Verificar si la respuesta es JSON válida
-    try:
-        clientes_data = response.json()
-    except requests.exceptions.JSONDecodeError:
-        print(f"❌ Error: Koibox devolvió una respuesta no válida. Respuesta: {response.text}")
-        return None
+    if response.status_code == 200:
+        try:
+            clientes_data = response.json()
 
-    # 🔹 Verificar si la estructura es válida
-    if isinstance(clientes_data, dict) and "clientes" in clientes_data:
-        clientes = clientes_data["clientes"]
-    elif isinstance(clientes_data, list):
-        clientes = clientes_data
+            # ✅ Adaptar a la nueva estructura de respuesta de Koibox
+            if "results" in clientes_data and isinstance(clientes_data["results"], list):
+                clientes = clientes_data["results"]
+                for cliente in clientes:
+                    if cliente.get("movil") == telefono:
+                        return cliente.get("id")  # Devuelve el ID del cliente si lo encuentra
+            else:
+                print(f"⚠️ Estructura inesperada en la respuesta de Koibox: {clientes_data}")
+                return None
+        except Exception as e:
+            print(f"❌ Error procesando la respuesta de Koibox: {e}")
+            return None
     else:
-        print(f"⚠️ Estructura inesperada en la respuesta de Koibox. Respuesta: {clientes_data}")
+        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
         return None
-
-    # 🔹 Buscar cliente por teléfono
-    for cliente in clientes:
-        if cliente.get("movil") == telefono:
-            return cliente.get("value")  # Devuelve el ID del cliente si lo encuentra
 
     return None  # Si no encuentra el cliente, retorna None
 
@@ -62,7 +61,7 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     
     if response.status_code == 201:
-        return response.json().get("value")  # Devuelve el ID del cliente recién creado
+        return response.json().get("id")  # Devuelve el ID del cliente recién creado
     else:
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
