@@ -42,7 +42,7 @@ def buscar_cliente(telefono):
         if "results" in clientes_data:
             for cliente in clientes_data["results"]:
                 if normalizar_telefono(cliente.get("movil")) == telefono:
-                    return cliente.get("id")
+                    return cliente.get("value")  # Devolver el ID correcto
         return None
     return None
 
@@ -51,9 +51,9 @@ def crear_cliente(nombre, telefono):
     telefono = normalizar_telefono(telefono)
     datos_cliente = {"nombre": nombre, "movil": telefono, "is_anonymous": False}
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-    
+
     if response.status_code == 201:
-        return response.json().get("id")
+        return response.json().get("value")
     return None
 
 # 📄 **Obtener lista de servicios desde Koibox**
@@ -64,7 +64,7 @@ def obtener_servicios():
     if response.status_code == 200:
         servicios_data = response.json()
         if "results" in servicios_data:
-            return {s["nombre"].lower(): s["id"] for s in servicios_data["results"] if s["is_active"]}
+            return {s["text"].lower(): s["value"] for s in servicios_data["results"] if s["is_active"]}
     return {}
 
 # 🔍 **Seleccionar el servicio más parecido**
@@ -97,11 +97,16 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "estado": {"value": 1, "nombre": "Confirmada"}
     }
 
+    print(f"📤 Enviando cita a Koibox: {datos_cita}")  # Debugging
+
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
 
     if response.status_code == 201:
+        print(f"✅ Cita creada con éxito: {response.json()}")
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
-    return False, f"⚠️ No se pudo agendar la cita: {response.text}"
+    else:
+        print(f"❌ Error creando la cita en Koibox: {response.text}")
+        return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Calcular hora de finalización**
 def calcular_hora_fin(hora_inicio, duracion_horas):
