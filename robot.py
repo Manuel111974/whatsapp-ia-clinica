@@ -8,13 +8,13 @@ from twilio.twiml.messaging_response import MessagingResponse
 # 📌 Configuración de Flask
 app = Flask(__name__)
 
-# 📌 Configuración de Redis
+# 📌 Configuración de Redis para manejo de sesiones
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # 📌 Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
-KOIBOX_URL = "https://api.koibox.cloud/api/agenda/"
+KOIBOX_URL = "https://api.koibox.cloud/api"
 
 HEADERS = {
     "Authorization": f"Bearer {KOIBOX_API_KEY}",
@@ -22,18 +22,20 @@ HEADERS = {
 }
 
 # 📌 ID del empleado "Gabriel Asistente IA"
-GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID real de Gabriel en Koibox
+GABRIEL_USER_ID = 1  # ⚠️ Ajusta según corresponda
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
-    url = f"https://api.koibox.cloud/api/clientes/"
+    url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
     
     if response.status_code == 200:
         clientes = response.json().get("results", [])
         for cliente in clientes:
             if cliente.get("movil") == telefono:
-                return cliente.get("id"), cliente.get("nombre")  # Retornamos ID y nombre
+                print(f"✅ Cliente encontrado en Koibox: {cliente.get('id')} - {cliente.get('nombre')}")
+                return cliente.get("id"), cliente.get("nombre")
+    print(f"⚠️ Cliente no encontrado en Koibox con teléfono: {telefono}")
     return None, None  
 
 # 🆕 **Crear cliente en Koibox si no existe**
@@ -43,21 +45,25 @@ def crear_cliente(nombre, telefono):
         "movil": telefono,
         "is_anonymous": False
     }
-    response = requests.post(f"https://api.koibox.cloud/api/clientes/", headers=HEADERS, json=datos_cliente)
+    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     
     if response.status_code == 201:
         cliente_info = response.json()
-        return cliente_info.get("id"), cliente_info.get("nombre")  # Retornamos ID y nombre
-    return None, None
+        print(f"✅ Cliente creado en Koibox: {cliente_info.get('id')} - {cliente_info.get('nombre')}")
+        return cliente_info.get("id"), cliente_info.get("nombre")
+    else:
+        print(f"❌ Error creando cliente en Koibox: {response.text}")
+        return None, None
 
 # 📄 **Obtener lista de servicios desde Koibox**
 def obtener_servicios():
-    url = f"https://api.koibox.cloud/api/servicios/"
+    url = f"{KOIBOX_URL}/servicios/"
     response = requests.get(url, headers=HEADERS)
     
     if response.status_code == 200:
         servicios = response.json().get("results", [])
         return {s["nombre"]: s["id"] for s in servicios}
+    print(f"❌ Error al obtener servicios de Koibox: {response.text}")
     return {}
 
 # 🔍 **Buscar el servicio más parecido**
@@ -82,15 +88,22 @@ def crear_cita(cliente_id, cliente_nombre, fecha, hora, servicio_solicitado):
         "hora_fin": calcular_hora_fin(hora, 1),
         "titulo": servicio_solicitado,
         "notas": "Cita agendada por Gabriel (IA)",
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},  # Asignamos explícitamente el empleado
-        "cliente": {"value": cliente_id, "text": cliente_nombre},  # Enviamos ID y nombre
+        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},  # Asignamos Gabriel IA
+        "cliente": {"value": cliente_id, "text": cliente_nombre},  # Enviamos ID y nombre del cliente
         "servicios": [{"id": servicio_id, "value": servicio_id, "text": servicio_solicitado}],
         "estado": {"id": 1, "value": 1, "nombre": "Confirmado"}
     }
+
+    print(f"📅 Creando cita con los siguientes datos: {datos_cita}")
     
-    response = requests.post(KOIBOX_URL, headers=HEADERS, json=datos_cita)
+    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
     
-    return (True, "✅ ¡Tu cita ha sido creada con éxito!") if response.status_code in [200, 201] else (False, f"⚠️ Error al agendar la cita: {response.text}")
+    if response.status_code in [200, 201]:
+        print(f"✅ Cita creada correctamente en Koibox")
+        return True, "✅ ¡Tu cita ha sido creada con éxito!"
+    else:
+        print(f"❌ Error al agendar la cita en Koibox: {response.text}")
+        return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Calcular la hora de finalización**
 def calcular_hora_fin(hora_inicio, duracion_horas):
@@ -135,21 +148,16 @@ def webhook():
     elif redis_client.get(sender + "_estado") == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=1200)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=1200)
-        respuesta = "¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉."
+        respuesta = "¿Qué tratamiento necesitas? 💉."
 
     elif redis_client.get(sender + "_estado") == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=1200)
-
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
-        servicio = redis_client.get(sender + "_servicio")
+        servicio = incoming_msg
 
-        cliente_id, cliente_nombre = buscar_cliente(telefono)
-        if not cliente_id:
-            cliente_id, cliente_nombre = crear_cliente(nombre, telefono)
-
+        cliente_id, cliente_nombre = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
         exito, mensaje = crear_cita(cliente_id, cliente_nombre, fecha, hora, servicio) if cliente_id else (False, "No pude registrar tu cita.")
 
         respuesta = mensaje
@@ -157,6 +165,5 @@ def webhook():
     msg.body(respuesta)
     return str(resp)
 
-# 🚀 **Iniciar aplicación**
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
