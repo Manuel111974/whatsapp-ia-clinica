@@ -34,6 +34,7 @@ def normalizar_telefono(telefono):
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
+    print(f"🔍 Buscando cliente en Koibox con teléfono: {telefono}")
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
 
@@ -41,21 +42,28 @@ def buscar_cliente(telefono):
         clientes_data = response.json()
         for cliente in clientes_data.get("results", []):
             if normalizar_telefono(cliente.get("movil")) == telefono:
-                return cliente.get("value")  # ID correcto del cliente
+                print(f"✅ Cliente encontrado: {cliente['text']} (ID: {cliente['value']})")
+                return cliente["value"]
+    print("⚠️ Cliente no encontrado en Koibox.")
     return None
 
 # 🆕 **Crear cliente en Koibox si no existe**
 def crear_cliente(nombre, telefono):
     telefono = normalizar_telefono(telefono)
+    print(f"➕ Creando nuevo cliente: {nombre} - {telefono}")
     datos_cliente = {"nombre": nombre, "movil": telefono, "is_anonymous": False}
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
     if response.status_code == 201:
-        return response.json().get("value")
+        cliente_id = response.json().get("value")
+        print(f"✅ Cliente creado con éxito: ID {cliente_id}")
+        return cliente_id
+    print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
-# 📄 **Obtener lista de servicios desde Koibox con LOGS de depuración**
+# 📄 **Obtener lista de servicios desde Koibox**
 def obtener_servicios():
+    print("📡 Obteniendo lista de servicios de Koibox...")
     url = f"{KOIBOX_URL}/servicios/"
     response = requests.get(url, headers=HEADERS)
 
@@ -63,31 +71,28 @@ def obtener_servicios():
         servicios_data = response.json()
         if "results" in servicios_data:
             servicios = {s["text"].lower(): s["value"] for s in servicios_data["results"] if s["is_active"]}
-            print(f"✅ Servicios obtenidos de Koibox: {servicios}")  # Log para depuración
+            print(f"✅ Servicios obtenidos: {servicios}")
             return servicios
-
-    print(f"❌ No se pudieron obtener los servicios: {response.text}")  # Log de error
+    print(f"❌ Error obteniendo servicios: {response.text}")
     return {}
 
-# 🔍 **Seleccionar el servicio más parecido con LOGS de depuración**
+# 🔍 **Seleccionar el servicio más parecido**
 def encontrar_servicio_mas_parecido(servicio_solicitado):
     servicios = obtener_servicios()
-
     if not servicios:
         return None, "No se encontraron servicios disponibles en Koibox."
 
-    print(f"📌 Buscando servicio parecido a: {servicio_solicitado}")
-
+    print(f"🔎 Buscando coincidencia para el servicio: {servicio_solicitado}")
     mejor_match, score, _ = process.extractOne(servicio_solicitado.lower(), servicios.keys())
 
     if score > 75:
-        print(f"✅ Servicio encontrado: {mejor_match} (ID {servicios[mejor_match]})")  # Log de éxito
+        print(f"✅ Servicio encontrado: {mejor_match} (ID {servicios[mejor_match]})")
         return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
     
-    print("❌ No se encontró un servicio similar en la lista.")  # Log de error
+    print("❌ No se encontró un servicio similar.")
     return None, "No encontré un servicio similar."
 
-# 📆 **Crear cita en Koibox con LOGS de depuración**
+# 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
 
@@ -106,7 +111,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "estado": {"value": 1, "nombre": "Confirmada"}
     }
 
-    print(f"📤 Enviando cita a Koibox: {datos_cita}")  # Log de depuración
+    print(f"📤 Enviando cita a Koibox: {datos_cita}")
 
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
 
@@ -145,7 +150,19 @@ def webhook():
         servicio = redis_client.get(sender + "_servicio")
         print(f"📩 Servicio recibido del usuario: {servicio}")
 
-        respuesta = "Estoy procesando tu solicitud de cita..."
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+
+        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+
+        if cliente_id:
+            exito, mensaje = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio)
+        else:
+            exito, mensaje = False, "No pude registrar tu cita porque no se pudo crear el cliente."
+
+        respuesta = mensaje
 
     msg.body(respuesta)
     return str(resp)
