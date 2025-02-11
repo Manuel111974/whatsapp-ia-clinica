@@ -5,14 +5,14 @@ import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
-# 🔧 **Configuración de Flask**
+# 📌 Configuración de Flask
 app = Flask(__name__)
 
-# 🛠️ **Configuración de Redis**
+# 📌 Configuración de Redis para la memoria temporal
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# 🔑 **Configuración de Koibox API**
+# 📌 Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/api"
 
@@ -21,33 +21,34 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 📌 **ID del usuario "Gabriel Asistente IA" en Koibox**
+# 📌 ID del empleado "Gabriel Asistente IA" en Koibox (REEMPLAZAR SI ES NECESARIO)
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR CON EL ID REAL
-
-# ✅ **Endpoint para comprobar que el servidor está activo**
-@app.route("/")
-def home():
-    return "Gabriel está en línea 🚀"
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
 
-    if response.status_code == 200:
-        try:
-            clientes_data = response.json()
-            clientes = clientes_data.get("clientes", clientes_data)  # Soporte para ambas estructuras
-
-            for cliente in clientes:
-                if cliente.get("movil") == telefono:
-                    return cliente.get("value")  # Devuelve el ID del cliente si lo encuentra
-        except Exception as e:
-            print(f"❌ Error procesando la respuesta de Koibox: {e}")
-            return None
-    else:
-        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+    # 🔹 Verificar si la respuesta es JSON válida
+    try:
+        clientes_data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        print(f"❌ Error: Koibox devolvió una respuesta no válida. Respuesta: {response.text}")
         return None
+
+    # 🔹 Verificar si la estructura es válida
+    if isinstance(clientes_data, dict) and "clientes" in clientes_data:
+        clientes = clientes_data["clientes"]
+    elif isinstance(clientes_data, list):
+        clientes = clientes_data
+    else:
+        print(f"⚠️ Estructura inesperada en la respuesta de Koibox. Respuesta: {clientes_data}")
+        return None
+
+    # 🔹 Buscar cliente por teléfono
+    for cliente in clientes:
+        if cliente.get("movil") == telefono:
+            return cliente.get("value")  # Devuelve el ID del cliente si lo encuentra
 
     return None  # Si no encuentra el cliente, retorna None
 
@@ -67,31 +68,25 @@ def crear_cliente(nombre, telefono):
         return None
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, fecha, hora, servicio_id=1):
+def crear_cita(cliente_id, fecha, hora, servicio_id):
     datos_cita = {
         "fecha": fecha,
         "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora
+        "hora_fin": calcular_hora_fin(hora, 1),  # Duración 1 hora por defecto
         "notas": "Cita agendada por Gabriel (IA)",
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {"value": cliente_id},
-        "estado": {"value": 1, "text": "Programada"},
-        "servicios": [{"value": servicio_id}]
+        "servicios": [{"value": servicio_id}],
+        "estado": {"value": 1, "text": "Programada"}
     }
     
-    print("\n📤 Intentando crear cita en Koibox...")
-    print("🔹 Datos enviados:", datos_cita)
-
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-
-    print("🔹 Respuesta de Koibox:", response.status_code, response.text)  # Log del error
-
+    
     if response.status_code == 201:
-        print("✅ Cita creada con éxito")
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
-        print("⚠️ Error al crear cita:", response.text)  # Registro de error en logs
-        return False, f"⚠️ No se pudo agendar la cita. Error: {response.text}"
+        print(f"❌ Error al agendar la cita: {response.text}")
+        return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Función para calcular la hora de finalización**
 def calcular_hora_fin(hora_inicio, duracion_horas):
@@ -102,7 +97,7 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
 # 📩 **Webhook para recibir mensajes de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     # Inicializar respuesta de Twilio
