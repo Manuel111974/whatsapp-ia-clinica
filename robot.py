@@ -30,21 +30,39 @@ def normalizar_telefono(telefono):
         telefono = "+34" + telefono
     return telefono
 
-# 📌 Obtener servicios de Koibox con 2 intentos
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    for intento in range(2):  # 🔁 Reintentar una vez si falla
-        response = requests.get(url, headers=HEADERS)
+# 🔍 **Buscar cliente en Koibox**
+def buscar_cliente(telefono):
+    telefono = normalizar_telefono(telefono)
+    url = f"{KOIBOX_URL}/clientes/"
+    response = requests.get(url, headers=HEADERS)
 
-        if response.status_code == 200:
-            servicios_data = response.json()
-            if "results" in servicios_data and isinstance(servicios_data["results"], list):
-                return {s["nombre"]: s["id"] for s in servicios_data["results"]}
-        
-        print(f"⚠️ Intento {intento+1}: Error al obtener servicios de Koibox: {response.status_code}")
-        print(f"🔴 Respuesta de Koibox: {response.content}")
+    if response.status_code == 200:
+        clientes_data = response.json()
+        if "results" in clientes_data and isinstance(clientes_data["results"], list):
+            for cliente in clientes_data["results"]:
+                if normalizar_telefono(cliente.get("movil")) == telefono:
+                    return cliente.get("id")  # Retorna el ID del cliente si lo encuentra
+        return None
+    else:
+        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
+        return None
 
-    return {}
+# 🆕 **Crear cliente en Koibox si no existe**
+def crear_cliente(nombre, telefono):
+    telefono = normalizar_telefono(telefono)
+    datos_cliente = {
+        "nombre": nombre,
+        "movil": telefono,
+        "is_anonymous": False
+    }
+    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+
+    if response.status_code == 201:
+        print(f"✅ Cliente creado correctamente: {response.json()}")
+        return response.json().get("id")
+    else:
+        print(f"❌ Error creando cliente en Koibox: {response.text}")
+        return None
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
@@ -73,13 +91,26 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "servicios": [{"value": servicio_id}],
         "estado": 1
     }
-    
+
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-    
+
     if response.status_code == 201:
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
+
+# 📄 **Obtener lista de servicios desde Koibox**
+def obtener_servicios():
+    url = f"{KOIBOX_URL}/servicios/"
+    response = requests.get(url, headers=HEADERS)
+
+    if response.status_code == 200:
+        servicios_data = response.json()
+        if "results" in servicios_data and isinstance(servicios_data["results"], list):
+            return {s["nombre"]: s["id"] for s in servicios_data["results"]}
+    
+    print(f"❌ Error al obtener servicios de Koibox: {response.text}")
+    return {}
 
 # ⏰ **Calcular hora de finalización**
 def calcular_hora_fin(hora_inicio, duracion_horas):
@@ -126,7 +157,7 @@ def webhook():
         elif estado == "esperando_hora":
             redis_client.set(sender + "_hora", incoming_msg)
             redis_client.set(sender + "_estado", "esperando_servicio")
-            msg.body("¿Qué tratamiento necesitas? 💉 (Ejemplo: 'Diseño de sonrisa')")
+            msg.body("¿Qué tratamiento necesitas? 💉 (Ejemplo: 'Botox')")
 
         elif estado == "esperando_servicio":
             redis_client.set(sender + "_servicio", incoming_msg)
