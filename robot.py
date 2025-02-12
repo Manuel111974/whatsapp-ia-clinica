@@ -30,51 +30,19 @@ def normalizar_telefono(telefono):
         telefono = "+34" + telefono
     return telefono
 
-# 🔍 **Buscar cliente en Koibox**
-def buscar_cliente(telefono):
-    telefono = normalizar_telefono(telefono)
-    url = f"{KOIBOX_URL}/clientes/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        clientes_data = response.json()
-        if "results" in clientes_data and isinstance(clientes_data["results"], list):
-            for cliente in clientes_data["results"]:
-                if normalizar_telefono(cliente.get("movil")) == telefono:
-                    return cliente.get("id")  
-        return None
-    else:
-        print(f"❌ Error al obtener clientes de Koibox: {response.text}")
-        return None
-
-# 🆕 **Crear cliente en Koibox si no existe**
-def crear_cliente(nombre, telefono):
-    telefono = normalizar_telefono(telefono)
-    datos_cliente = {
-        "nombre": nombre,
-        "movil": telefono,
-        "is_anonymous": False
-    }
-    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-    
-    if response.status_code == 201:
-        return response.json().get("id")
-    else:
-        print(f"❌ Error creando cliente en Koibox: {response.text}")
-        return None
-
-# 📄 **Obtener lista de servicios desde Koibox**
+# 📌 Obtener servicios de Koibox con 2 intentos
 def obtener_servicios():
     url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
+    for intento in range(2):  # 🔁 Reintentar una vez si falla
+        response = requests.get(url, headers=HEADERS)
 
-    if response.status_code == 200:
-        servicios_data = response.json()
-        if "results" in servicios_data and isinstance(servicios_data["results"], list):
-            return {s["nombre"]: s["id"] for s in servicios_data["results"]}
-    else:
-        print(f"❌ Error al obtener servicios de Koibox: {response.text}")
-        print(f"🔴 Respuesta de Koibox: {response.content}")  # 🔍 Mostrar respuesta cruda
+        if response.status_code == 200:
+            servicios_data = response.json()
+            if "results" in servicios_data and isinstance(servicios_data["results"], list):
+                return {s["nombre"]: s["id"] for s in servicios_data["results"]}
+        
+        print(f"⚠️ Intento {intento+1}: Error al obtener servicios de Koibox: {response.status_code}")
+        print(f"🔴 Respuesta de Koibox: {response.content}")
 
     return {}
 
@@ -85,10 +53,10 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     if not servicios:
         return False, "⚠️ No pude obtener la lista de servicios. Inténtalo más tarde."
 
-    if servicio_solicitado not in servicios:
-        return False, f"⚠️ No encontré el servicio '{servicio_solicitado}', intenta con otro nombre."
+    servicio_id = servicios.get(servicio_solicitado)
 
-    servicio_id = servicios[servicio_solicitado]
+    if not servicio_id:
+        return False, f"⚠️ No encontré el servicio '{servicio_solicitado}', intenta con otro nombre."
 
     datos_cita = {
         "fecha": fecha,
