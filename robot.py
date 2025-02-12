@@ -64,6 +64,19 @@ def crear_cliente(nombre, telefono):
         print(f"❌ Error creando cliente en Koibox: {response.text}")
         return None
 
+# 📄 **Obtener lista de servicios desde Koibox**
+def obtener_servicios():
+    url = f"{KOIBOX_URL}/servicios/"
+    response = requests.get(url, headers=HEADERS)
+
+    if response.status_code == 200:
+        servicios_data = response.json()
+        if "results" in servicios_data and isinstance(servicios_data["results"], list):
+            return {s["nombre"].lower(): s["id"] for s in servicios_data["results"]}
+    
+    print(f"❌ Error al obtener servicios de Koibox: {response.text}")
+    return {}
+
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     servicios = obtener_servicios()
@@ -71,7 +84,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     if not servicios:
         return False, "⚠️ No pude obtener la lista de servicios. Inténtalo más tarde."
 
-    servicio_id = servicios.get(servicio_solicitado)
+    servicio_id = servicios.get(servicio_solicitado.lower())
 
     if not servicio_id:
         return False, f"⚠️ No encontré el servicio '{servicio_solicitado}', intenta con otro nombre."
@@ -82,6 +95,10 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "hora_fin": calcular_hora_fin(hora, 1),
         "titulo": servicio_solicitado,
         "notas": "Cita agendada por Gabriel (IA)",
+        "is_empleado_aleatorio": True,
+        "is_notificada_por_whatsapp": True,
+        "is_notificada_por_email": True,
+        "is_notificada_por_sms": True,
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {
             "value": cliente_id,
@@ -89,28 +106,15 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
             "movil": telefono
         },
         "servicios": [{"value": servicio_id}],
-        "estado": 1
+        "estado": {"id": 1, "nombre": "Pendiente"}
     }
 
-    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
+    response = requests.post(f"{KOIBOX_URL}/agenda/cita", headers=HEADERS, json=datos_cita)
 
     if response.status_code == 201:
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     else:
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-
-# 📄 **Obtener lista de servicios desde Koibox**
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        servicios_data = response.json()
-        if "results" in servicios_data and isinstance(servicios_data["results"], list):
-            return {s["nombre"]: s["id"] for s in servicios_data["results"]}
-    
-    print(f"❌ Error al obtener servicios de Koibox: {response.text}")
-    return {}
 
 # ⏰ **Calcular hora de finalización**
 def calcular_hora_fin(hora_inicio, duracion_horas):
