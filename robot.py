@@ -119,33 +119,18 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 🤖 **Generar respuesta con OpenAI GPT-4**
-def generar_respuesta(contexto):
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente virtual de Sonrisas Hollywood, una clínica de odontología estética en Valencia. Responde de manera cálida, profesional y natural."},
-                {"role": "user", "content": contexto}
-            ],
-            max_tokens=150
-        )
-        return response["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        return "Lo siento, no puedo responder en este momento."
-
 # 📩 **Webhook de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    estado_usuario = redis_client.get(sender + "_estado")
+    estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # 📌 **Respuestas a saludos y preguntas generales con IA**
+    # 📌 **Respuestas a saludos y preguntas generales**
     if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
         msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
         return str(resp)
@@ -178,6 +163,12 @@ def webhook():
         msg.body("¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '11:00')")
         return str(resp)
 
+    if estado_usuario == "esperando_hora":
+        redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
+        msg.body("¿Qué servicio necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa')")
+        return str(resp)
+
     if estado_usuario == "esperando_servicio":
         redis_client.set(sender + "_servicio", incoming_msg, ex=600)
         msg.body("Procesando tu cita... ⏳")
@@ -194,7 +185,8 @@ def webhook():
         msg.body(mensaje)
         return str(resp)
 
-    msg.body(generar_respuesta(incoming_msg))
+    # Si el usuario responde algo fuera del flujo, mantenemos la conversación activa
+    msg.body("No entendí bien tu mensaje. ¿Puedes reformularlo? 😊")
     return str(resp)
 
 if __name__ == "__main__":
