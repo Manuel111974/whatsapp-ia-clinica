@@ -6,17 +6,17 @@ from rapidfuzz import process
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
-# Configuración de Flask
+# 📌 Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# 📌 Configuración de Redis para memoria de conversación
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI
+# 📌 Configuración de OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Configuración de Koibox API
+# 📌 Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/api"
 
@@ -25,10 +25,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID del asistente Gabriel en Koibox (ajustar si es diferente)
+# 📌 ID del asistente Gabriel en Koibox
 GABRIEL_USER_ID = 1  
 
-# 📌 **Normalizar formato del teléfono**
+# 📌 Normalizar formato del teléfono
 def normalizar_telefono(telefono):
     telefono = telefono.strip().replace(" ", "").replace("-", "")
     if not telefono.startswith("+34"):
@@ -119,10 +119,10 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 📩 **Webhook de WhatsApp**
+# 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
@@ -130,14 +130,20 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado") or ""
 
-    # 📌 **Respuestas a saludos y preguntas generales**
-    if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
-        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
-        return str(resp)
-
-    if "precio" in incoming_msg or "coste" in incoming_msg:
-        msg.body("El diseño de sonrisa tiene un precio medio de 2500€. ¿Quieres que te agende una cita de valoración gratuita?")
-        return str(resp)
+    # 📌 **Usar OpenAI para responder preguntas generales**
+    if not estado_usuario:
+        contexto = f"Usuario: {incoming_msg}\nGabriel es un asistente de la clínica Sonrisas Hollywood. Responde de manera profesional y cálida."
+        try:
+            ai_response = openai.ChatCompletion.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "system", "content": contexto}],
+                max_tokens=100
+            )
+            respuesta_ai = ai_response["choices"][0]["message"]["content"].strip()
+            msg.body(respuesta_ai)
+            return str(resp)
+        except Exception as e:
+            print(f"Error en OpenAI: {e}")
 
     # 📌 **Flujo de citas**
     if "cita" in incoming_msg or "reservar" in incoming_msg:
@@ -185,8 +191,6 @@ def webhook():
         msg.body(mensaje)
         return str(resp)
 
-    # Si el usuario responde algo fuera del flujo, mantenemos la conversación activa
-    msg.body("No entendí bien tu mensaje. ¿Puedes reformularlo? 😊")
     return str(resp)
 
 if __name__ == "__main__":
