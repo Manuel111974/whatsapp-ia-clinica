@@ -9,7 +9,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # 📌 Configuración de Flask
 app = Flask(__name__)
 
-# 📌 Configuración de Redis para memoria de conversación
+# 📌 Configuración de Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -122,7 +122,7 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
 # 📩 **Webhook para WhatsApp con Memoria Mejorada + IA**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
@@ -135,34 +135,32 @@ def webhook():
     historial += f"\nUsuario: {incoming_msg}"
     redis_client.set(sender + "_historial", historial, ex=3600)
 
-    # 📌 **Flujo de citas**
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
+    # 📌 **Respuestas fijas para preguntas comunes**
+    if "ubicación" in incoming_msg or "dónde están" in incoming_msg or "dirección" in incoming_msg:
+        msg.body("📍 Nuestra clínica Sonrisas Hollywood está en **Calle Colón 48, Valencia**. ¡Te esperamos! 😊")
         return str(resp)
 
-    if estado_usuario == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        msg.body(f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞.")
+    if "cómo llegar" in incoming_msg:
+        msg.body("📍 Estamos en **Calle Colón 48, Valencia**. Puedes llegar en metro (Colón), autobús o en coche. Hay parkings cercanos como el de El Corte Inglés y el de la Calle Cirilo Amorós. 🚗🚌🚶‍♂️")
         return str(resp)
 
     # 📌 **Conversación natural usando IA**
-    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}"
+    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}\nNota: La clínica Sonrisas Hollywood está en Calle Colón 48, Valencia."
+    
     respuesta_ia = openai.ChatCompletion.create(
         model="gpt-4-turbo",
         messages=[
-            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde de forma cálida y profesional."},
+            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil. La clínica está en Calle Colón 48, Valencia."},
             {"role": "user", "content": contexto}
         ],
         max_tokens=150
     )
-    
+
     respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
 
     msg.body(respuesta_final)
     return str(resp)
 
-# 🚀 **Ejecutar aplicación**
+# 🚀 **Iniciar aplicación**
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
