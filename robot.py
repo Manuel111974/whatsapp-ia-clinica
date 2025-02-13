@@ -5,6 +5,7 @@ import openai
 from rapidfuzz import process
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+import re
 
 # 📌 Configuración de Flask
 app = Flask(__name__)
@@ -31,10 +32,18 @@ DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo. 🔔 Pulsa 11 + campana e
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
-    telefono = telefono.strip().replace(" ", "").replace("-", "")
-    if not telefono.startswith("+34"):
+    """
+    - Elimina el prefijo 'whatsapp:' si existe.
+    - Asegura que el número tenga el formato internacional correcto.
+    - Trunca el número si excede los 16 caracteres.
+    """
+    telefono = telefono.replace("whatsapp:", "").strip()
+    telefono = re.sub(r"[^\d+]", "", telefono)  # Solo deja números y "+"
+    
+    if not telefono.startswith("+34"):  # Ajusta según el país
         telefono = "+34" + telefono
-    return telefono
+    
+    return telefono[:16]  # Koibox no acepta más de 16 caracteres
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -54,6 +63,11 @@ def buscar_cliente(telefono):
 # 🆕 **Crear cliente en Koibox**
 def crear_cliente(nombre, telefono):
     telefono = normalizar_telefono(telefono)
+    
+    if len(telefono) > 16:
+        print(f"❌ Error: Número de teléfono excede los 16 caracteres permitidos en Koibox: {telefono}")
+        return None
+
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
@@ -68,31 +82,6 @@ def crear_cliente(nombre, telefono):
         return cliente_data.get("id")  
     print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
-
-# 📄 **Obtener lista de servicios desde Koibox**
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        servicios_data = response.json()
-        if isinstance(servicios_data, list):
-            return {s["nombre"]: s["id"] for s in servicios_data}
-    print(f"❌ Error obteniendo servicios de Koibox: {response.text}")
-    return {}
-
-# 🔍 **Seleccionar el servicio más parecido**
-def encontrar_servicio_mas_parecido(servicio_solicitado):
-    servicios = obtener_servicios()
-    if not servicios:
-        return None, "No hay servicios disponibles."
-
-    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
-
-    if score > 75:
-        return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
-    
-    return None, "No encontré un servicio similar."
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
@@ -121,12 +110,6 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     else:
         print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-
-# ⏰ **Calcular hora de finalización**
-def calcular_hora_fin(hora_inicio, duracion_horas):
-    h, m = map(int, hora_inicio.split(":"))
-    h += duracion_horas
-    return f"{h:02d}:{m:02d}"
 
 # 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
