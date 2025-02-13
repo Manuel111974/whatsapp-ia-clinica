@@ -27,6 +27,7 @@ HEADERS = {
 
 # 📌 ID del asistente Gabriel en Koibox
 GABRIEL_USER_ID = 1  
+DIRECCION_CLINICA = "📍 Calle Colón 48, Valencia."
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
@@ -43,10 +44,10 @@ def buscar_cliente(telefono):
 
     if response.status_code == 200:
         clientes_data = response.json()
-        if "results" in clientes_data and isinstance(clientes_data["results"], list):
-            for cliente in clientes_data["results"]:
-                if normalizar_telefono(cliente.get("movil")) == telefono:
-                    return cliente.get("id")
+        if isinstance(clientes_data, list):  # Verificamos si es una lista
+            for cliente in clientes_data:
+                if normalizar_telefono(cliente.get("movil", "")) == telefono:
+                    return cliente.get("id")  # Retornar ID del cliente si se encuentra
     return None
 
 # 🆕 **Crear cliente en Koibox**
@@ -61,7 +62,8 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
     if response.status_code == 201:
-        return response.json().get("id")
+        cliente_data = response.json()
+        return cliente_data.get("id")  # Devolvemos el ID del cliente creado
     return None
 
 # 📄 **Obtener lista de servicios desde Koibox**
@@ -71,8 +73,8 @@ def obtener_servicios():
 
     if response.status_code == 200:
         servicios_data = response.json()
-        if "results" in servicios_data and isinstance(servicios_data["results"], list):
-            return {s["nombre"]: s["id"] for s in servicios_data["results"]}
+        if isinstance(servicios_data, list):
+            return {s["nombre"]: s["id"] for s in servicios_data}
     return {}
 
 # 🔍 **Seleccionar el servicio más parecido**
@@ -87,15 +89,6 @@ def encontrar_servicio_mas_parecido(servicio_solicitado):
         return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
     
     return None, "No encontré un servicio similar."
-
-# 📆 **Registrar consulta en Koibox si el cliente solo pide información**
-def registrar_consulta(cliente_id, servicio):
-    datos_consulta = {
-        "cliente": cliente_id,
-        "notas": f"El cliente ha preguntado por {servicio}."
-    }
-    response = requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}/", headers=HEADERS, json=datos_consulta)
-    return response.status_code == 200
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
@@ -116,7 +109,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "estado": 1
     }
     
-    response = requests.post(f"{KOIBOX_URL}/agenda/cita", headers=HEADERS, json=datos_cita)
+    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
@@ -129,10 +122,10 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 📩 **Webhook para WhatsApp con IA y registro automático en Koibox**
+# 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
@@ -150,16 +143,19 @@ def webhook():
     historial += f"\nUsuario: {incoming_msg}"
     redis_client.set(sender + "_historial", historial, ex=3600)
 
-    # 📌 **Si el cliente pregunta por un tratamiento, registramos la consulta**
-    posibles_servicios = ["botox", "diseño de sonrisa", "blanqueamiento", "ortodoncia", "radiesse"]
-    for servicio in posibles_servicios:
-        if servicio in incoming_msg.lower():
-            if cliente_id:
-                registrar_consulta(cliente_id, servicio)
-            break
+    # 📌 **Filtrar si el usuario pregunta por la dirección**
+    if any(x in incoming_msg for x in ["dónde están", "ubicación", "cómo llegar", "dirección"]):
+        msg.body(f"Estamos en {DIRECCION_CLINICA}. ¡Te esperamos!")
+        return str(resp)
 
-    # 📌 **Conversación natural usando IA**
-    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}\nNota: La clínica Sonrisas Hollywood está en Calle Colón 48, Valencia."
+    # 📌 **Confirmación de cita y eliminación de estado**
+    if estado_usuario == "confirmando_cita":
+        msg.body(f"Tu cita está confirmada. Nos vemos en {DIRECCION_CLINICA}. ¡Te esperamos!")
+        redis_client.delete(sender + "_estado")  
+        return str(resp)
+
+    # 📌 **Conversación con IA**
+    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}\nNota: La clínica Sonrisas Hollywood está en Valencia."
 
     respuesta_ia = openai.ChatCompletion.create(
         model="gpt-4-turbo",
