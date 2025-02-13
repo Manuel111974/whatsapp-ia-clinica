@@ -48,6 +48,7 @@ def buscar_cliente(telefono):
             for cliente in clientes_data:
                 if normalizar_telefono(cliente.get("movil", "")) == telefono:
                     return cliente.get("id")
+    print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
     return None
 
 # 🆕 **Crear cliente en Koibox**
@@ -63,7 +64,9 @@ def crear_cliente(nombre, telefono):
 
     if response.status_code == 201:
         cliente_data = response.json()
+        print(f"✅ Cliente creado correctamente: {cliente_data}")
         return cliente_data.get("id")  
+    print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
 # 📄 **Obtener lista de servicios desde Koibox**
@@ -75,6 +78,7 @@ def obtener_servicios():
         servicios_data = response.json()
         if isinstance(servicios_data, list):
             return {s["nombre"]: s["id"] for s in servicios_data}
+    print(f"❌ Error obteniendo servicios de Koibox: {response.text}")
     return {}
 
 # 🔍 **Seleccionar el servicio más parecido**
@@ -112,8 +116,10 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
+        print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
         return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
     else:
+        print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # ⏰ **Calcular hora de finalización**
@@ -139,23 +145,21 @@ def webhook():
     if not cliente_id:
         cliente_id = crear_cliente("Cliente WhatsApp", sender)
 
-    # 📌 **Memoria de conversación**
-    historial += f"\nUsuario: {incoming_msg}"
-    redis_client.set(sender + "_historial", historial, ex=3600)
-
-    # 📌 **Consultas de dirección**
-    if any(x in incoming_msg for x in ["dónde están", "ubicación", "cómo llegar", "dirección", "timbre"]):
-        msg.body(f"Nuestra clínica está en {DIRECCION_CLINICA}. ¡Te esperamos!")
-        return str(resp)
-
-    # 📌 **Confirmación de cita**
+    # 📌 **Flujo de agendamiento de cita**
     if estado_usuario == "confirmando_cita":
-        msg.body(f"Tu cita está confirmada. Nos vemos en {DIRECCION_CLINICA}. ¡Te esperamos!")
-        redis_client.delete(sender + "_estado")  
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = sender
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+        servicio = redis_client.get(sender + "_servicio")
+
+        exito, mensaje = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio)
+        msg.body(mensaje)
+        redis_client.delete(sender + "_estado")
         return str(resp)
 
     # 📌 **Conversación con IA**
-    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}\nNota: La clínica Sonrisas Hollywood está en Valencia."
+    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}"
 
     respuesta_ia = openai.ChatCompletion.create(
         model="gpt-4-turbo",
@@ -167,7 +171,6 @@ def webhook():
     )
 
     respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
-
     msg.body(respuesta_final)
     return str(resp)
 
