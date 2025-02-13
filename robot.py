@@ -9,7 +9,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # 📌 Configuración de Flask
 app = Flask(__name__)
 
-# 📌 Configuración de Redis para memoria
+# 📌 Configuración de Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -27,7 +27,7 @@ HEADERS = {
 
 # 📌 ID del asistente Gabriel en Koibox
 GABRIEL_USER_ID = 1  
-DIRECCION_CLINICA = "📍 Calle Colón 48, Valencia."
+DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo. 🔔 Pulsa 11 + campana en el telefonillo para subir."
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
@@ -44,10 +44,10 @@ def buscar_cliente(telefono):
 
     if response.status_code == 200:
         clientes_data = response.json()
-        if isinstance(clientes_data, list):  # Verificamos si es una lista
+        if isinstance(clientes_data, list):
             for cliente in clientes_data:
                 if normalizar_telefono(cliente.get("movil", "")) == telefono:
-                    return cliente.get("id")  # Retornar ID del cliente si se encuentra
+                    return cliente.get("id")
     return None
 
 # 🆕 **Crear cliente en Koibox**
@@ -63,7 +63,7 @@ def crear_cliente(nombre, telefono):
 
     if response.status_code == 201:
         cliente_data = response.json()
-        return cliente_data.get("id")  # Devolvemos el ID del cliente creado
+        return cliente_data.get("id")  
     return None
 
 # 📄 **Obtener lista de servicios desde Koibox**
@@ -112,7 +112,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
-        return True, "✅ ¡Tu cita ha sido creada con éxito!"
+        return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
     else:
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
@@ -139,16 +139,16 @@ def webhook():
     if not cliente_id:
         cliente_id = crear_cliente("Cliente WhatsApp", sender)
 
-    # 📌 **Guardar memoria de conversación**
+    # 📌 **Memoria de conversación**
     historial += f"\nUsuario: {incoming_msg}"
     redis_client.set(sender + "_historial", historial, ex=3600)
 
-    # 📌 **Filtrar si el usuario pregunta por la dirección**
-    if any(x in incoming_msg for x in ["dónde están", "ubicación", "cómo llegar", "dirección"]):
-        msg.body(f"Estamos en {DIRECCION_CLINICA}. ¡Te esperamos!")
+    # 📌 **Consultas de dirección**
+    if any(x in incoming_msg for x in ["dónde están", "ubicación", "cómo llegar", "dirección", "timbre"]):
+        msg.body(f"Nuestra clínica está en {DIRECCION_CLINICA}. ¡Te esperamos!")
         return str(resp)
 
-    # 📌 **Confirmación de cita y eliminación de estado**
+    # 📌 **Confirmación de cita**
     if estado_usuario == "confirmando_cita":
         msg.body(f"Tu cita está confirmada. Nos vemos en {DIRECCION_CLINICA}. ¡Te esperamos!")
         redis_client.delete(sender + "_estado")  
@@ -163,7 +163,7 @@ def webhook():
             {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
             {"role": "user", "content": contexto}
         ],
-        max_tokens=150
+        max_tokens=200
     )
 
     respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
