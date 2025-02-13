@@ -9,7 +9,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # 📌 Configuración de Flask
 app = Flask(__name__)
 
-# 📌 Configuración de Redis
+# 📌 Configuración de Redis para memoria
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -55,7 +55,8 @@ def crear_cliente(nombre, telefono):
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
-        "is_anonymous": False
+        "is_anonymous": False,
+        "notas": "Cliente registrado a través de WhatsApp con Gabriel IA."
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
@@ -86,6 +87,15 @@ def encontrar_servicio_mas_parecido(servicio_solicitado):
         return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
     
     return None, "No encontré un servicio similar."
+
+# 📆 **Registrar consulta en Koibox si el cliente solo pide información**
+def registrar_consulta(cliente_id, servicio):
+    datos_consulta = {
+        "cliente": cliente_id,
+        "notas": f"El cliente ha preguntado por {servicio}."
+    }
+    response = requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}/", headers=HEADERS, json=datos_consulta)
+    return response.status_code == 200
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
@@ -119,10 +129,10 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 📩 **Webhook para WhatsApp con Memoria Mejorada + IA**
+# 📩 **Webhook para WhatsApp con IA y registro automático en Koibox**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
@@ -131,26 +141,30 @@ def webhook():
     estado_usuario = redis_client.get(sender + "_estado") or ""
     historial = redis_client.get(sender + "_historial") or ""
 
+    # 📌 **Registrar al usuario en Koibox si no existe**
+    cliente_id = buscar_cliente(sender)
+    if not cliente_id:
+        cliente_id = crear_cliente("Cliente WhatsApp", sender)
+
     # 📌 **Guardar memoria de conversación**
     historial += f"\nUsuario: {incoming_msg}"
     redis_client.set(sender + "_historial", historial, ex=3600)
 
-    # 📌 **Respuestas fijas para preguntas comunes**
-    if "ubicación" in incoming_msg or "dónde están" in incoming_msg or "dirección" in incoming_msg:
-        msg.body("📍 Nuestra clínica Sonrisas Hollywood está en **Calle Colón 48, Valencia**. ¡Te esperamos! 😊")
-        return str(resp)
-
-    if "cómo llegar" in incoming_msg:
-        msg.body("📍 Estamos en **Calle Colón 48, Valencia**. Puedes llegar en metro (Colón), autobús o en coche. Hay parkings cercanos como el de El Corte Inglés y el de la Calle Cirilo Amorós. 🚗🚌🚶‍♂️")
-        return str(resp)
+    # 📌 **Si el cliente pregunta por un tratamiento, registramos la consulta**
+    posibles_servicios = ["botox", "diseño de sonrisa", "blanqueamiento", "ortodoncia", "radiesse"]
+    for servicio in posibles_servicios:
+        if servicio in incoming_msg.lower():
+            if cliente_id:
+                registrar_consulta(cliente_id, servicio)
+            break
 
     # 📌 **Conversación natural usando IA**
     contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}\nNota: La clínica Sonrisas Hollywood está en Calle Colón 48, Valencia."
-    
+
     respuesta_ia = openai.ChatCompletion.create(
         model="gpt-4-turbo",
         messages=[
-            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil. La clínica está en Calle Colón 48, Valencia."},
+            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
             {"role": "user", "content": contexto}
         ],
         max_tokens=150
