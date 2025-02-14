@@ -109,20 +109,6 @@ def actualizar_notas_koibox(cliente_id, nueva_nota):
         print(f"❌ Error al obtener cliente en Koibox: {response.text}")
 
 
-def procesar_cita(cliente_id, nombre_paciente, fecha, hora, tratamiento, comentarios=""):
-    """
-    Registra la cita y actualiza las notas en Koibox con la información relevante.
-    """
-    datos_cita = f"""
-    📝 **Cita registrada**:
-    📅 Fecha: {fecha}
-    🕒 Hora: {hora}
-    💆 Tratamiento: {tratamiento}
-    🗒️ Comentarios: {comentarios if comentarios else 'Ninguno'}
-    """
-    actualizar_notas_koibox(cliente_id, datos_cita)
-
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
@@ -130,17 +116,24 @@ def webhook():
     """
     data = request.json
 
+    # Registrar datos recibidos para depuración
+    print(f"📩 Datos recibidos: {json.dumps(data, indent=2)}")
+
     if not data or "From" not in data:
         print("⚠️ Error: No se recibió un número de teléfono válido en la solicitud.")
-        return jsonify({"status": "error", "message": "Número de teléfono no recibido."}), 400
+        return jsonify({
+            "status": "error",
+            "message": "Número de teléfono no recibido.",
+            "data_recibida": data  # Enviar datos recibidos para depuración
+        }), 400
 
-    sender = data["From"]
+    sender = data.get("From")
     if not sender:
         print("⚠️ Error: El campo 'From' está vacío o es inválido.")
         return jsonify({"status": "error", "message": "El número de teléfono no es válido."}), 400
 
     sender = sender.replace("whatsapp:", "")  # Extraer número sin prefijo de WhatsApp
-    message_body = data["Body"].strip().lower()
+    message_body = data.get("Body", "").strip().lower()
 
     print(f"📩 Mensaje recibido de {sender}: {message_body}")
 
@@ -172,7 +165,14 @@ def webhook():
                 hora = partes[1].strip().split(" ")[0]  # Primer elemento después de "a las"
 
             # Agregar la cita a Koibox
-            procesar_cita(cliente_id, sender, fecha, hora, tratamiento, comentarios)
+            nueva_nota = f"""
+            📝 **Cita registrada**:
+            📅 Fecha: {fecha}
+            🕒 Hora: {hora}
+            💆 Tratamiento: {tratamiento}
+            🗒️ Comentarios: {comentarios if comentarios else 'Ninguno'}
+            """
+            actualizar_notas_koibox(cliente_id, nueva_nota)
 
             return jsonify({
                 "status": "success",
