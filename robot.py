@@ -40,14 +40,13 @@ def normalizar_telefono(telefono):
     
     return telefono[:16]  # Koibox no acepta más de 16 caracteres
 
-# 🔍 **Buscar cliente en Koibox (corregido)**
+# 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
 
-    # 📌 Verificar primero en Redis para evitar consultas innecesarias
+    # 📌 Verificar primero en Redis
     cliente_id = redis_client.get(f"cliente_{telefono}")
     if cliente_id:
-        print(f"✅ Cliente encontrado en cache: {cliente_id}")
         return cliente_id
 
     # 📌 Hacer una consulta exacta a Koibox
@@ -62,21 +61,15 @@ def buscar_cliente(telefono):
             redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
             return cliente_id
 
-    print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
     return None
 
-# 🆕 **Crear cliente en Koibox (ahora lo guarda en Redis)**
+# 🆕 **Crear cliente en Koibox**
 def crear_cliente(telefono):
     telefono = normalizar_telefono(telefono)
     
-    if len(telefono) > 16:
-        print(f"❌ Error: Número de teléfono excede los 16 caracteres permitidos en Koibox: {telefono}")
-        return None
-
     datos_cliente = {
         "nombre": "Cliente WhatsApp",
         "movil": telefono,
-        "is_anonymous": False,
         "notas": "Cliente registrado a través de WhatsApp con Gabriel IA."
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
@@ -85,9 +78,7 @@ def crear_cliente(telefono):
         cliente_data = response.json()
         cliente_id = cliente_data.get("id")
         redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
-        print(f"✅ Cliente creado correctamente: {cliente_data}")
         return cliente_id  
-    print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
 # 📆 **Crear cita en Koibox**
@@ -105,10 +96,8 @@ def crear_cita(cliente_id, telefono, fecha, hora, servicio, notas):
     response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
-        print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
         return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}\n📍 {GOOGLE_MAPS_LINK}"
     else:
-        print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
 
 # 📩 **Webhook para WhatsApp**
@@ -150,6 +139,24 @@ def webhook():
     if "nota" in incoming_msg or "recordar" in incoming_msg:
         redis_client.set(sender + "_notas", incoming_msg)
         msg.body("📝 Notado. Lo recordaré para tu próxima cita.")
+        return str(resp)
+
+    # 📌 **Conversación general con IA (asegurar siempre una respuesta)**
+    try:
+        respuesta_ia = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
+                {"role": "user", "content": incoming_msg}
+            ],
+            max_tokens=200
+        )
+        respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
+        msg.body(respuesta_final)
+
+    except Exception as e:
+        print(f"⚠️ Error al generar respuesta de IA: {e}")
+        msg.body("Lo siento, en este momento no puedo responder. Inténtalo más tarde.")
 
     return str(resp)
 
