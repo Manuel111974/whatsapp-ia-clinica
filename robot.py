@@ -43,15 +43,23 @@ def normalizar_telefono(telefono):
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
     url = f"{KOIBOX_URL}/clientes/"
-    response = requests.get(url, headers=HEADERS)
+    
+    try:
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()  # Lanza un error si la respuesta no es 200
 
-    if response.status_code == 200:
         clientes_data = response.json()
-        for cliente in clientes_data:
-            if normalizar_telefono(cliente.get("movil", "")) == telefono:
-                return cliente.get("id"), cliente.get("notas", "")
-    print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
-    return None, ""
+        if isinstance(clientes_data, list):
+            for cliente in clientes_data:
+                if isinstance(cliente, dict) and normalizar_telefono(cliente.get("movil", "")) == telefono:
+                    return cliente.get("id"), cliente.get("notas", "")
+        
+        print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
+        return None, ""
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error en la solicitud a Koibox: {e}")
+        return None, ""
 
 # 🆕 **Crear cliente en Koibox**
 def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA."):
@@ -62,14 +70,18 @@ def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA."):
         "movil": telefono,
         "notas": notas
     }
-    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+    
+    try:
+        response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+        response.raise_for_status()
 
-    if response.status_code == 201:
         cliente_data = response.json()
         print(f"✅ Cliente creado correctamente en Koibox: {cliente_data}")
         return cliente_data.get("id")
-    print(f"❌ Error creando cliente en Koibox: {response.text}")
-    return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error creando cliente en Koibox: {e}")
+        return None
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas_adicionales):
@@ -83,14 +95,16 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas_adicio
         "estado": 1  # Estado de cita programada
     }
     
-    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
-    
-    if response.status_code == 201:
+    try:
+        response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
+        response.raise_for_status()
+
         print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
         return f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
-    else:
-        print(f"❌ Error creando cita en Koibox: {response.text}")
-        return f"⚠️ No se pudo agendar la cita: {response.text}"
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error creando cita en Koibox: {e}")
+        return f"⚠️ No se pudo agendar la cita: {e}"
 
 # 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
@@ -125,21 +139,26 @@ def webhook():
     # 📌 **Llamada a IA para responder al usuario**
     contexto = f"Usuario: {incoming_msg}\nHistorial:\n{notas_cliente}"
 
-    respuesta_ia = openai.ChatCompletion.create(
-        model="gpt-4-turbo",
-        messages=[
-            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
-            {"role": "user", "content": contexto}
-        ],
-        max_tokens=200
-    )
+    try:
+        respuesta_ia = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
+                {"role": "user", "content": contexto}
+            ],
+            max_tokens=200
+        )
 
-    respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
-    msg.body(respuesta_final)
+        respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
+        msg.body(respuesta_final)
 
-    # 📌 **Actualizar notas en Koibox**
-    nuevas_notas = f"{notas_cliente}\nInteracción reciente: {incoming_msg}"
-    requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}/", headers=HEADERS, json={"notas": nuevas_notas})
+        # 📌 **Actualizar notas en Koibox**
+        nuevas_notas = f"{notas_cliente}\nInteracción reciente: {incoming_msg}"
+        requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}/", headers=HEADERS, json={"notas": nuevas_notas})
+
+    except openai.error.OpenAIError as e:
+        print(f"❌ Error en la IA de OpenAI: {e}")
+        msg.body("⚠️ Lo siento, hubo un problema técnico. Inténtalo más tarde.")
 
     return str(resp)
 
