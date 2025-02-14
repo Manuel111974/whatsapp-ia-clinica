@@ -1,6 +1,5 @@
 import os
 import requests
-import json
 import redis
 from flask import Flask, request, jsonify
 
@@ -25,24 +24,19 @@ def webhook():
     Maneja los mensajes de WhatsApp y procesa citas en Koibox.
     """
     try:
-        # Ver contenido crudo recibido
-        raw_data = request.get_data(as_text=True)
-        print(f"📩 **Datos crudos recibidos:** {raw_data}")
+        # Obtener los datos correctamente desde Twilio
+        data = request.form  # Twilio envía datos en x-www-form-urlencoded
 
-        # Intentar parsear como JSON
-        try:
-            data = json.loads(raw_data)
-        except json.JSONDecodeError:
-            print("⚠️ **Error:** No se pudo decodificar JSON.")
-            return jsonify({"status": "error", "message": "No se recibió JSON válido."}), 400
+        # Mostrar datos crudos para depuración
+        print(f"📩 **Datos recibidos (form):** {data}")
 
-        # Validar si la clave 'From' está presente
-        if "From" not in data:
-            print(f"⚠️ **Error:** No se encontró 'From' en los datos: {data}")
+        # Validar si 'From' está presente
+        sender = data.get("From", "").replace("whatsapp:", "").strip()
+        message_body = data.get("Body", "").strip()
+
+        if not sender:
+            print("⚠️ **Error:** No se recibió un número de teléfono válido.")
             return jsonify({"status": "error", "message": "Número de teléfono no recibido.", "data": data}), 400
-
-        sender = data["From"].replace("whatsapp:", "")
-        message_body = data.get("Body", "").strip().lower()
 
         print(f"📩 **Mensaje recibido de {sender}:** {message_body}")
 
