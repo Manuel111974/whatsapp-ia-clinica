@@ -15,7 +15,7 @@ app = Flask(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de OpenAI (IA)
+# Configuración de OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
@@ -40,7 +40,7 @@ def obtener_ofertas():
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             ofertas = [element.get_text() for element in soup.find_all("div", class_="x1iorvi4")]
-            return ofertas[:3] if ofertas else [f"No encontré ofertas activas. Puedes verlas aquí: {FACEBOOK_URL}"]
+            return ofertas[:3] if ofertas else ["No encontré ofertas activas."]
     except Exception as e:
         return [f"Error al obtener ofertas: {str(e)}"]
 
@@ -104,7 +104,14 @@ def webhook():
     # **Ofertas**
     if "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas = obtener_ofertas()
-        msg.body("💰 Ofertas actuales:\n" + "\n".join(ofertas))
+        msg.body("💰 Ofertas actuales:\n" + "\n".join(ofertas) + f"\n\nPuedes verlas aquí: {FACEBOOK_URL}")
+        return str(resp)
+
+    # **Reservar cita para una oferta**
+    if "cita" in incoming_msg and "oferta" in incoming_msg:
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        redis_client.set(sender + "_servicio", "Oferta especial")
+        msg.body("¡Perfecto! ¿Para qué fecha deseas la cita? 📅 (Ejemplo: '2025-02-17')")
         return str(resp)
 
     # **Servicios**
@@ -152,15 +159,12 @@ def webhook():
         msg.body(f"✅ Cita registrada para *{cliente['nombre']}*: {servicio} el *{fecha} a las {hora}*.")
         return str(resp)
 
-    # **Respuesta por defecto**
-    if OPENAI_API_KEY:
-        respuesta_ia = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": incoming_msg}]
-        )
-        msg.body(respuesta_ia["choices"][0]["message"]["content"])
-    else:
-        msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
+    # **Respuesta por defecto con IA**
+    respuesta_ia = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": incoming_msg}]
+    )
+    msg.body(respuesta_ia["choices"][0]["message"]["content"])
     
     return str(resp)
 
