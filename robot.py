@@ -61,13 +61,13 @@ def buscar_cliente(telefono):
     return None
 
 # 🆕 **Crear cliente en Koibox**
-def crear_cliente(telefono, nombre):
+def crear_cliente(telefono, nombre, notas):
     telefono = normalizar_telefono(telefono)
     
     datos_cliente = {
         "nombre": nombre if nombre else "Cliente WhatsApp",
         "movil": telefono,
-        "notas": f"Cliente registrado a través de WhatsApp con Gabriel IA. Nombre proporcionado: {nombre if nombre else 'No especificado'}."
+        "notas": notas
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
@@ -112,7 +112,7 @@ def webhook():
     # 📌 **Registrar cliente en Koibox si no existe**
     cliente_id = buscar_cliente(sender)
     if not cliente_id:
-        cliente_id = crear_cliente(sender, nombre_usuario)
+        cliente_id = crear_cliente(sender, nombre_usuario, "Cliente registrado a través de WhatsApp con Gabriel IA.")
 
     # 📌 **Manejo de estados**
     if "limpieza" in incoming_msg:
@@ -138,7 +138,13 @@ def webhook():
         nombre = redis_client.get(sender + "_nombre")
         servicio = redis_client.get(sender + "_servicio")
 
-        exito, mensaje = crear_cita(cliente_id, nombre, sender, fecha, incoming_msg, servicio, "Sin notas adicionales")
+        notas = f"Paciente: {nombre}\nServicio: {servicio}\nFecha y hora: {fecha}\nAgendado por Gabriel IA."
+        cliente_id = buscar_cliente(sender)
+
+        if not cliente_id:
+            cliente_id = crear_cliente(sender, nombre, notas)
+
+        exito, mensaje = crear_cita(cliente_id, nombre, sender, fecha, incoming_msg, servicio, notas)
         msg.body(mensaje)
         redis_client.delete(sender + "_estado")
         return str(resp)
