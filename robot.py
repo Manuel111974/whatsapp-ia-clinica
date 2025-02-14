@@ -2,9 +2,10 @@ import os
 import redis
 import requests
 import openai
-import re
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
+import re
+import json
 
 # 📌 Configuración de Flask
 app = Flask(__name__)
@@ -47,35 +48,39 @@ def buscar_cliente(telefono):
     try:
         response = requests.get(url, headers=HEADERS)
         response.raise_for_status()
-
         clientes_data = response.json()
+
         if isinstance(clientes_data, list):
             for cliente in clientes_data:
-                if isinstance(cliente, dict) and normalizar_telefono(cliente.get("movil", "")) == telefono:
-                    print(f"✅ Cliente encontrado en Koibox: {cliente.get('id')}")
+                if normalizar_telefono(cliente.get("movil", "")) == telefono:
                     return cliente.get("id"), cliente.get("notas", "")
-        
-        print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
         return None, ""
-
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error en la solicitud a Koibox: {e}")
+        print(f"❌ Error buscando cliente en Koibox: {e}")
         return None, ""
 
-# 🆕 **Crear cliente en Koibox (Solo si no existe)**
+# 🆕 **Obtener o crear cliente en Koibox**
 def obtener_o_crear_cliente(nombre, telefono):
     cliente_id, notas_cliente = buscar_cliente(telefono)
     
     if cliente_id:
         return cliente_id, notas_cliente
 
-    print("🆕 Creando nuevo cliente en Koibox...")
+    print(f"🆕 Creando nuevo cliente en Koibox: {nombre} ({telefono})")
+
     datos_cliente = {
-        "nombre": nombre,
+        "nombre": nombre or "Cliente WhatsApp",
         "movil": telefono,
-        "notas": "Cliente registrado por Gabriel IA."
+        "notas": "Cliente registrado por Gabriel IA.",
+        "is_active": True,
+        "is_anonymous": False,
+        "is_suscrito_newsletter": False,
+        "is_suscrito_encuestas": False
     }
-    
+
+    # 🔍 Mostrar JSON que se enviará a Koibox
+    print(f"📤 Enviando JSON a Koibox: {json.dumps(datos_cliente, indent=2)}")
+
     try:
         response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
         response.raise_for_status()
@@ -84,32 +89,33 @@ def obtener_o_crear_cliente(nombre, telefono):
         print(f"✅ Cliente creado correctamente en Koibox: {cliente_data}")
         return cliente_data.get("id"), "Cliente registrado por Gabriel IA."
 
+    except requests.exceptions.HTTPError as http_err:
+        print(f"❌ Error HTTP creando cliente en Koibox: {http_err}")
+        print(f"🔍 Respuesta del servidor: {response.text}")  
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error creando cliente en Koibox: {e}")
-        return None, ""
+        print(f"❌ Error general creando cliente en Koibox: {e}")
+
+    return None, ""
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas_adicionales):
+def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado, notas):
     datos_cita = {
         "fecha": fecha,
         "hora_inicio": hora,
-        "titulo": servicio,
-        "notas": f"Cita creada por Gabriel IA. {notas_adicionales}",
+        "titulo": servicio_solicitado,
+        "notas": f"Cita agendada por Gabriel (IA).\n{notas}",
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
-        "estado": 1  # Estado de cita programada
+        "estado": 1
     }
     
     try:
         response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
         response.raise_for_status()
-
-        print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
-        return f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
-
+        return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
     except requests.exceptions.RequestException as e:
         print(f"❌ Error creando cita en Koibox: {e}")
-        return f"⚠️ No se pudo agendar la cita: {e}"
+        return False, f"⚠️ No se pudo agendar la cita."
 
 # 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
@@ -120,47 +126,42 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # 📌 **Buscar o registrar cliente en Koibox**
+    estado_usuario = redis_client.get(sender + "_estado") or ""
+    historial = redis_client.get(sender + "_historial") or ""
+
+    # 📌 **Registrar al usuario en Koibox si no existe**
     cliente_id, notas_cliente = obtener_o_crear_cliente("Cliente WhatsApp", sender)
 
     # 📌 **Flujo de agendamiento de cita**
-    estado_usuario = redis_client.get(sender + "_estado") or ""
-    
     if estado_usuario == "confirmando_cita":
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = sender
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
         servicio = redis_client.get(sender + "_servicio")
-        notas = f"Motivo de la cita: {servicio}. Historial: {notas_cliente}"
+        notas = redis_client.get(sender + "_notas") or ""
 
-        resultado = crear_cita(cliente_id, "Cliente WhatsApp", sender, fecha, hora, servicio, notas)
-        msg.body(resultado)
-
+        exito, mensaje = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas)
+        msg.body(mensaje)
         redis_client.delete(sender + "_estado")
         return str(resp)
 
-    # 📌 **Llamada a IA para responder al usuario**
-    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{notas_cliente}"
+    # 📌 **Conversación con IA**
+    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}"
 
-    try:
-        respuesta_ia = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
-                {"role": "user", "content": contexto}
-            ],
-            max_tokens=200
-        )
+    respuesta_ia = openai.ChatCompletion.create(
+        model="gpt-4-turbo",
+        messages=[
+            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
+            {"role": "user", "content": contexto}
+        ],
+        max_tokens=200
+    )
 
-        respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
-        msg.body(respuesta_final)
+    respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
+    msg.body(respuesta_final)
 
-        # 📌 **Actualizar notas en Koibox**
-        nuevas_notas = f"{notas_cliente}\nInteracción reciente: {incoming_msg}"
-        requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}/", headers=HEADERS, json={"notas": nuevas_notas})
-
-    except openai.error.OpenAIError as e:
-        print(f"❌ Error en la IA de OpenAI: {e}")
-        msg.body("⚠️ Lo siento, hubo un problema técnico. Inténtalo más tarde.")
+    redis_client.set(sender + "_historial", historial + "\n" + incoming_msg)
 
     return str(resp)
 
