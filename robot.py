@@ -139,6 +139,16 @@ def webhook():
         msg.body(ofertas if ofertas else "No se encontraron ofertas actuales.")
         return str(resp)
 
+    # 📌 Si el usuario pregunta por servicios
+    if "servicios" in incoming_msg or "qué ofrecen" in incoming_msg:
+        servicios = obtener_servicios()
+        if servicios:
+            lista_servicios = "\n".join(f"- {s}" for s in servicios.keys())
+            msg.body(f"Estos son nuestros servicios:\n{lista_servicios}")
+        else:
+            msg.body("Actualmente no tengo información de los servicios. ¡Contáctanos!")
+        return str(resp)
+
     # 📌 Si el usuario quiere reservar una cita
     if "cita" in incoming_msg or "reservar" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
