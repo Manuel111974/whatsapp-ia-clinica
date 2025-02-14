@@ -46,12 +46,13 @@ def buscar_cliente(telefono):
     
     try:
         response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()  # Lanza un error si la respuesta no es 200
+        response.raise_for_status()
 
         clientes_data = response.json()
         if isinstance(clientes_data, list):
             for cliente in clientes_data:
                 if isinstance(cliente, dict) and normalizar_telefono(cliente.get("movil", "")) == telefono:
+                    print(f"✅ Cliente encontrado en Koibox: {cliente.get('id')}")
                     return cliente.get("id"), cliente.get("notas", "")
         
         print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
@@ -61,14 +62,18 @@ def buscar_cliente(telefono):
         print(f"❌ Error en la solicitud a Koibox: {e}")
         return None, ""
 
-# 🆕 **Crear cliente en Koibox**
-def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA."):
-    telefono = normalizar_telefono(telefono)
+# 🆕 **Crear cliente en Koibox (Solo si no existe)**
+def obtener_o_crear_cliente(nombre, telefono):
+    cliente_id, notas_cliente = buscar_cliente(telefono)
+    
+    if cliente_id:
+        return cliente_id, notas_cliente
 
+    print("🆕 Creando nuevo cliente en Koibox...")
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
-        "notas": notas
+        "notas": "Cliente registrado por Gabriel IA."
     }
     
     try:
@@ -77,11 +82,11 @@ def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA."):
 
         cliente_data = response.json()
         print(f"✅ Cliente creado correctamente en Koibox: {cliente_data}")
-        return cliente_data.get("id")
+        return cliente_data.get("id"), "Cliente registrado por Gabriel IA."
 
     except requests.exceptions.RequestException as e:
         print(f"❌ Error creando cliente en Koibox: {e}")
-        return None
+        return None, ""
 
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas_adicionales):
@@ -116,10 +121,7 @@ def webhook():
     msg = resp.message()
 
     # 📌 **Buscar o registrar cliente en Koibox**
-    cliente_id, notas_cliente = buscar_cliente(sender)
-    if not cliente_id:
-        cliente_id = crear_cliente("Cliente WhatsApp", sender)
-        notas_cliente = "Cliente registrado por Gabriel IA."
+    cliente_id, notas_cliente = obtener_o_crear_cliente("Cliente WhatsApp", sender)
 
     # 📌 **Flujo de agendamiento de cita**
     estado_usuario = redis_client.get(sender + "_estado") or ""
