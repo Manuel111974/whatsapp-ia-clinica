@@ -29,12 +29,16 @@ def buscar_cliente(telefono):
     """
     Busca al cliente en Redis y Koibox.
     """
+    if not telefono:
+        print("⚠️ Número de teléfono vacío o inválido.")
+        return None
+
     cliente_id = REDIS_DB.get(telefono)
     if cliente_id:
         print(f"✅ Cliente encontrado en cache: {cliente_id}")
         return cliente_id
 
-    # Si no está en cache, buscar en Koibox
+    # Buscar en Koibox si no está en cache
     response = requests.get(KOIBOX_API_URL, headers=KOIBOX_HEADERS, params={"movil": telefono})
     
     if response.status_code == 200 and response.json():
@@ -51,6 +55,10 @@ def crear_cliente_koibox(nombre, telefono):
     """
     Crea un nuevo cliente en Koibox si no existe.
     """
+    if not telefono:
+        print("⚠️ Error: Intento de crear un cliente con un número vacío o inválido.")
+        return None
+
     payload = {
         "nombre": nombre or "Cliente WhatsApp",
         "movil": telefono,
@@ -77,6 +85,10 @@ def actualizar_notas_koibox(cliente_id, nueva_nota):
     """
     Actualiza las notas del cliente en Koibox con información de la cita.
     """
+    if not cliente_id:
+        print("⚠️ No se puede actualizar notas en Koibox: Cliente ID no válido.")
+        return
+
     response = requests.get(f"{KOIBOX_API_URL}{cliente_id}/", headers=KOIBOX_HEADERS)
     
     if response.status_code == 200:
@@ -117,7 +129,17 @@ def webhook():
     Maneja los mensajes de WhatsApp y procesa citas en Koibox.
     """
     data = request.json
-    sender = data["From"].replace("whatsapp:", "")  # Extraer número sin prefijo de WhatsApp
+
+    if not data or "From" not in data:
+        print("⚠️ Error: No se recibió un número de teléfono válido en la solicitud.")
+        return jsonify({"status": "error", "message": "Número de teléfono no recibido."}), 400
+
+    sender = data["From"]
+    if not sender:
+        print("⚠️ Error: El campo 'From' está vacío o es inválido.")
+        return jsonify({"status": "error", "message": "El número de teléfono no es válido."}), 400
+
+    sender = sender.replace("whatsapp:", "")  # Extraer número sin prefijo de WhatsApp
     message_body = data["Body"].strip().lower()
 
     print(f"📩 Mensaje recibido de {sender}: {message_body}")
