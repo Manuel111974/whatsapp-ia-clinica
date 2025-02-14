@@ -25,8 +25,13 @@ HEADERS = {
 # Configuración de la Página de Facebook de Sonrisas Hollywood
 FACEBOOK_PAGE_URL = "https://www.facebook.com/share/1BeQpVyja5/?mibextid=wwXIfr"
 
-# ID de Gabriel en Koibox
-GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID correcto
+# Información de la clínica
+INFO_CLINICA = """
+📍 **Ubicación:** Calle Colón 48, Valencia
+📞 **Teléfono:** 618 44 93 32
+🕒 **Horario:** Lunes a Viernes 10:00 - 20:00
+🌍 **Más info:** https://g.co/kgs/U5uMgPg
+"""
 
 # 📌 Normalizar teléfono
 def normalizar_telefono(telefono):
@@ -40,10 +45,8 @@ def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
-
     if response.status_code == 200:
-        clientes_data = response.json()
-        for cliente in clientes_data.get("results", []):
+        for cliente in response.json().get("results", []):
             if normalizar_telefono(cliente.get("movil")) == telefono:
                 return cliente.get("id")
     return None
@@ -58,9 +61,7 @@ def crear_cliente(nombre, telefono):
         "is_active": True,
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-    if response.status_code == 201:
-        return response.json().get("id")
-    return None
+    return response.json().get("id") if response.status_code == 201 else None
 
 # 📄 Obtener lista de servicios desde Koibox
 def obtener_servicios():
@@ -75,11 +76,8 @@ def encontrar_servicio_mas_parecido(servicio_solicitado):
     servicios = obtener_servicios()
     if not servicios:
         return None, "No hay servicios disponibles."
-    
     mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
-    if score > 75:
-        return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
-    return None, "No encontré un servicio similar."
+    return (servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}") if score > 75 else (None, "No encontré un servicio similar.")
 
 # 📆 Crear cita en Koibox y actualizar notas
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
@@ -93,7 +91,6 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "hora_fin": calcular_hora_fin(hora, 1),
         "titulo": servicio_solicitado,
         "notas": f"Cita agendada por Gabriel IA para {nombre} ({telefono})",
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
         "servicios": [{"value": servicio_id}],
         "estado": 1
@@ -102,7 +99,6 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
-        # Actualizar notas en la ficha del paciente
         actualizar_notas_cliente(cliente_id, f"Agendada cita para {fecha} a las {hora} - Servicio: {servicio_solicitado}")
         return True, "✅ ¡Tu cita ha sido creada con éxito!"
     return False, f"⚠️ No se pudo agendar la cita: {response.text}"
@@ -132,8 +128,13 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
 
+    # 📌 Responder ubicación
+    if "dónde" in incoming_msg or "ubicación" in incoming_msg:
+        msg.body(INFO_CLINICA)
+        return str(resp)
+
     # 📌 Si el usuario pregunta por ofertas
-    if "oferta" in incoming_msg:
+    if "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas = obtener_ofertas_facebook()
         msg.body(ofertas if ofertas else "No se encontraron ofertas actuales.")
         return str(resp)
@@ -144,19 +145,16 @@ def webhook():
         msg.body("¡Genial! Primero dime tu nombre completo 😊.")
         return str(resp)
 
-    # 📌 Respuesta por defecto
-    msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
+    # 📌 Respuesta general
+    msg.body("¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. ¿Cómo puedo ayudarte? 😊")
     return str(resp)
 
-# 📥 Obtener ofertas desde la página de Facebook
+# 📥 Obtener ofertas desde Facebook
 def obtener_ofertas_facebook():
     response = requests.get(FACEBOOK_PAGE_URL)
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, "html.parser")
-        ofertas = []
-        for post in soup.find_all("div", class_="post-content"):
-            if "oferta" in post.text.lower():
-                ofertas.append(post.text.strip())
+        ofertas = [post.text.strip() for post in soup.find_all("div", class_="post-content") if "oferta" in post.text.lower()]
         return "\n\n".join(ofertas) if ofertas else "No hay ofertas activas en este momento."
     return "No se pudo acceder a la página de Facebook."
 
