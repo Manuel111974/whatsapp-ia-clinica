@@ -32,13 +32,13 @@ DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo. 🔔 Pulsa 11 + campana e
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
-    telefono = telefono.replace("whatsapp:", "").strip()
+    telefono = telefono.replace("whatsapp:", "").strip()  # Eliminar "whatsapp:"
     telefono = re.sub(r"[^\d+]", "", telefono)  # Solo deja números y "+"
     
     if not telefono.startswith("+34"):  # Ajusta según el país
         telefono = "+34" + telefono
     
-    return telefono[:16]  # Koibox no acepta más de 16 caracteres
+    return telefono[:16]  # Limitar a 16 caracteres
 
 # 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
@@ -61,6 +61,7 @@ def buscar_cliente(telefono):
 
 # 🆕 **Obtener o crear cliente en Koibox**
 def obtener_o_crear_cliente(nombre, telefono):
+    telefono = normalizar_telefono(telefono)  # Asegurar formato correcto
     cliente_id, notas_cliente = buscar_cliente(telefono)
     
     if cliente_id:
