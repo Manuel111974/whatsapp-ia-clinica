@@ -32,11 +32,6 @@ DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo. 🔔 Pulsa 11 + campana e
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
-    """
-    - Elimina el prefijo 'whatsapp:' si existe.
-    - Asegura que el número tenga el formato internacional correcto.
-    - Trunca el número si excede los 16 caracteres.
-    """
     telefono = telefono.replace("whatsapp:", "").strip()
     telefono = re.sub(r"[^\d+]", "", telefono)  # Solo deja números y "+"
     
@@ -83,6 +78,41 @@ def crear_cliente(nombre, telefono):
     print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
+# 📌 **Buscar disponibilidad de agenda en Koibox**
+def obtener_disponibilidad():
+    url = f"{KOIBOX_URL}/agenda/"
+    response = requests.get(url, headers=HEADERS)
+
+    if response.status_code == 200:
+        citas = response.json()
+        if isinstance(citas, list) and len(citas) > 0:
+            return citas[:5]  # Devuelve las 5 próximas citas
+    return None
+
+# 📌 **Obtener lista de servicios**
+def obtener_servicios():
+    url = f"{KOIBOX_URL}/servicios/"
+    response = requests.get(url, headers=HEADERS)
+
+    if response.status_code == 200:
+        servicios_data = response.json()
+        if isinstance(servicios_data, list):
+            return {s["nombre"]: s["id"] for s in servicios_data}
+    return {}
+
+# 🔍 **Seleccionar el servicio más parecido**
+def encontrar_servicio_mas_parecido(servicio_solicitado):
+    servicios = obtener_servicios()
+    if not servicios:
+        return None, "No hay servicios disponibles."
+
+    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
+
+    if score > 75:
+        return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
+    
+    return None, "No encontré un servicio similar."
+
 # 📆 **Crear cita en Koibox**
 def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
     servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
@@ -102,7 +132,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
         "estado": 1
     }
     
-    response = requests.post(f"{KOIBOX_URL}/agenda/", headers=HEADERS, json=datos_cita)
+    response = requests.post(f"{KOIBOX_URL}/agenda/cita", headers=HEADERS, json=datos_cita)
     
     if response.status_code == 201:
         print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
@@ -123,12 +153,10 @@ def webhook():
     estado_usuario = redis_client.get(sender + "_estado") or ""
     historial = redis_client.get(sender + "_historial") or ""
 
-    # 📌 **Registrar al usuario en Koibox si no existe**
     cliente_id = buscar_cliente(sender)
     if not cliente_id:
         cliente_id = crear_cliente("Cliente WhatsApp", sender)
 
-    # 📌 **Flujo de agendamiento de cita**
     if estado_usuario == "confirmando_cita":
         nombre = redis_client.get(sender + "_nombre")
         telefono = sender
@@ -141,7 +169,6 @@ def webhook():
         redis_client.delete(sender + "_estado")
         return str(resp)
 
-    # 📌 **Conversación con IA**
     contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}"
 
     respuesta_ia = openai.ChatCompletion.create(
