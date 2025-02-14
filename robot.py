@@ -40,24 +40,33 @@ def normalizar_telefono(telefono):
     
     return telefono[:16]  # Koibox no acepta más de 16 caracteres
 
-# 🔍 **Buscar cliente en Koibox**
+# 🔍 **Buscar cliente en Koibox (corregido)**
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
-    url = f"{KOIBOX_URL}/clientes/"
+
+    # 📌 Verificar primero en Redis para evitar consultas innecesarias
+    cliente_id = redis_client.get(f"cliente_{telefono}")
+    if cliente_id:
+        print(f"✅ Cliente encontrado en cache: {cliente_id}")
+        return cliente_id
+
+    # 📌 Hacer una consulta exacta a Koibox
+    url = f"{KOIBOX_URL}/clientes/?movil={telefono}"
     response = requests.get(url, headers=HEADERS)
 
     if response.status_code == 200:
         clientes_data = response.json()
         
         if isinstance(clientes_data, list) and len(clientes_data) > 0:
-            return clientes_data[0].get("id")  # Accede solo si hay resultados
-        
-        print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
-    
-    return None  # Retorna None si no encuentra al cliente o si la API falla
+            cliente_id = clientes_data[0].get("id")
+            redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
+            return cliente_id
 
-# 🆕 **Crear cliente en Koibox**
-def crear_cliente(nombre, telefono):
+    print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
+    return None
+
+# 🆕 **Crear cliente en Koibox (ahora lo guarda en Redis)**
+def crear_cliente(telefono):
     telefono = normalizar_telefono(telefono)
     
     if len(telefono) > 16:
@@ -65,7 +74,7 @@ def crear_cliente(nombre, telefono):
         return None
 
     datos_cliente = {
-        "nombre": nombre,
+        "nombre": "Cliente WhatsApp",
         "movil": telefono,
         "is_anonymous": False,
         "notas": "Cliente registrado a través de WhatsApp con Gabriel IA."
@@ -74,20 +83,22 @@ def crear_cliente(nombre, telefono):
 
     if response.status_code == 201:
         cliente_data = response.json()
+        cliente_id = cliente_data.get("id")
+        redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
         print(f"✅ Cliente creado correctamente: {cliente_data}")
-        return cliente_data.get("id")  
+        return cliente_id  
     print(f"❌ Error creando cliente en Koibox: {response.text}")
     return None
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas):
+def crear_cita(cliente_id, telefono, fecha, hora, servicio, notas):
     datos_cita = {
         "fecha": fecha,
         "hora_inicio": hora,
         "titulo": servicio,
         "notas": f"Cita agendada por Gabriel (IA).\n{notas}",
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
+        "cliente": {"value": cliente_id, "text": "Cliente WhatsApp", "movil": telefono},
         "estado": 1
     }
     
@@ -110,24 +121,21 @@ def webhook():
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado") or ""
-    historial = redis_client.get(sender + "_historial") or ""
     notas_usuario = redis_client.get(sender + "_notas") or ""
 
     # 📌 **Registrar al usuario en Koibox si no existe**
     cliente_id = buscar_cliente(sender)
     if not cliente_id:
-        cliente_id = crear_cliente("Cliente WhatsApp", sender)
+        cliente_id = crear_cliente(sender)
 
     # 📌 **Flujo de agendamiento de cita**
     if estado_usuario == "confirmando_cita":
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = sender
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
         servicio = redis_client.get(sender + "_servicio")
         notas = redis_client.get(sender + "_notas") or "Sin notas adicionales"
 
-        exito, mensaje = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas)
+        exito, mensaje = crear_cita(cliente_id, sender, fecha, hora, servicio, notas)
         msg.body(mensaje)
 
         redis_client.delete(sender + "_estado")
@@ -142,21 +150,6 @@ def webhook():
     if "nota" in incoming_msg or "recordar" in incoming_msg:
         redis_client.set(sender + "_notas", incoming_msg)
         msg.body("📝 Notado. Lo recordaré para tu próxima cita.")
-
-    # 📌 **Conversación con IA**
-    contexto = f"Usuario: {incoming_msg}\nHistorial:\n{historial}"
-
-    respuesta_ia = openai.ChatCompletion.create(
-        model="gpt-4-turbo",
-        messages=[
-            {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood en Valencia. Responde de forma cálida, profesional y útil."},
-            {"role": "user", "content": contexto}
-        ],
-        max_tokens=200
-    )
-
-    respuesta_final = respuesta_ia["choices"][0]["message"]["content"].strip()
-    msg.body(respuesta_final)
 
     return str(resp)
 
