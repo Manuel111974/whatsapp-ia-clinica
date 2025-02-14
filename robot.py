@@ -1,11 +1,12 @@
 import os
 import redis
 import requests
-from bs4 import BeautifulSoup
+import openai
+import dateparser
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+from bs4 import BeautifulSoup
 from rapidfuzz import process
-import openai  # 🔹 Ahora usa IA para respuestas más inteligentes
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -13,6 +14,10 @@ app = Flask(__name__)
 # Configuración de Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+# Configuración de OpenAI (IA)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 # Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
@@ -23,119 +28,136 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Configuración de OpenAI (GPT)
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Configuración de la Página de Facebook de Sonrisas Hollywood
-FACEBOOK_PAGE_URL = "https://www.facebook.com/share/1BeQpVyja5/?mibextid=wwXIfr"
-
 # Información de la clínica
-INFO_CLINICA = """
-📍 **Ubicación:** Calle Colón 48, Valencia
-📞 **Teléfono:** 618 44 93 32
-🕒 **Horario:** Lunes a Viernes 10:00 - 20:00
-🌍 **Más info:** https://g.co/kgs/U5uMgPg
-"""
+DIRECCION_CLINICA = "Calle Colón 48, Valencia"
+TELEFONO_CLINICA = "+34 618 44 93 32"
+FACEBOOK_URL = "https://www.facebook.com/share/1BeQpVyja5/?mibextid=wwXIfr"
 
-# 📌 Normalizar teléfono
-def normalizar_telefono(telefono):
-    telefono = telefono.strip().replace(" ", "").replace("-", "")
-    if not telefono.startswith("+34"):
-        telefono = "+34" + telefono
-    return telefono
+# 🆕 **Función para obtener ofertas desde Facebook**
+def obtener_ofertas():
+    try:
+        response = requests.get(FACEBOOK_URL)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            ofertas = [element.get_text() for element in soup.find_all("div", class_="x1iorvi4")]
+            return ofertas[:3] if ofertas else ["No encontré ofertas activas."]
+    except Exception as e:
+        return [f"Error al obtener ofertas: {str(e)}"]
 
-# 🔍 Buscar cliente en Koibox
+# 🔍 **Buscar cliente en Koibox**
 def buscar_cliente(telefono):
-    telefono = normalizar_telefono(telefono)
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
+
     if response.status_code == 200:
-        for cliente in response.json().get("results", []):
-            if normalizar_telefono(cliente.get("movil")) == telefono:
-                return cliente.get("id")
+        clientes_data = response.json()
+        if "results" in clientes_data and isinstance(clientes_data["results"], list):
+            for cliente in clientes_data["results"]:
+                if cliente.get("movil") == telefono:
+                    return cliente.get("id")
     return None
 
-# 🆕 Crear cliente en Koibox
-def crear_cliente(nombre, telefono):
-    telefono = normalizar_telefono(telefono)
-    datos_cliente = {
-        "nombre": nombre,
-        "movil": telefono,
-        "notas": "Cliente registrado por Gabriel IA.",
-        "is_active": True,
-    }
-    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-    return response.json().get("id") if response.status_code == 201 else None
+# 🆕 **Función para registrar notas en Koibox**
+def actualizar_notas_cliente(cliente_id, nueva_nota):
+    url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
+    cliente_data = requests.get(url, headers=HEADERS).json()
+    notas_actuales = cliente_data.get("notas", "")
+    notas_actualizadas = f"{notas_actuales}\n{nueva_nota}" if notas_actuales else nueva_nota
+    
+    datos_actualizados = {"notas": notas_actualizadas}
+    requests.patch(url, headers=HEADERS, json=datos_actualizados)
 
-# 📄 Obtener lista de servicios desde Koibox
+# 📄 **Obtener lista de servicios desde Koibox**
 def obtener_servicios():
     url = f"{KOIBOX_URL}/servicios/"
     response = requests.get(url, headers=HEADERS)
+
     if response.status_code == 200:
-        return {s["nombre"]: s["id"] for s in response.json().get("results", [])}
+        servicios_data = response.json()
+        return {s["nombre"]: s["id"] for s in servicios_data["results"]}
     return {}
 
-# 🔍 Seleccionar el servicio más parecido
-def encontrar_servicio_mas_parecido(servicio_solicitado):
-    servicios = obtener_servicios()
-    if not servicios:
-        return None, "No hay servicios disponibles."
-    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
-    return (servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}") if score > 75 else (None, "No encontré un servicio similar.")
-
-# 📥 Obtener ofertas desde Facebook
-def obtener_ofertas_facebook():
-    response = requests.get(FACEBOOK_PAGE_URL)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        ofertas = [post.text.strip() for post in soup.find_all("div", class_="post-content") if "oferta" in post.text.lower()]
-        return "\n\n".join(ofertas) if ofertas else "No hay ofertas activas en este momento."
-    return "No se pudo acceder a la página de Facebook."
-
-# 🔹 **Usar IA para responder de forma natural**
-def generar_respuesta_ia(mensaje):
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": "Eres un asistente de una clínica de odontología estética. Responde con amabilidad y profesionalismo."},
-                  {"role": "user", "content": mensaje}]
-    )
-    return response["choices"][0]["message"]["content"]
-
-# 📩 Webhook de WhatsApp
+# 📩 **Webhook de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
-    sender = request.values.get("From", "")
-
+    incoming_msg = request.values.get("Body", "").strip().lower()
+    sender = request.values.get("From", "").replace("whatsapp:", "")
     resp = MessagingResponse()
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado")
+    cliente_id = buscar_cliente(sender)
 
-    # 📌 Consultas sobre ubicación
-    if "dónde" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body(INFO_CLINICA)
+    # **Respuestas básicas**
+    if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
+        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood Valencia. ¿En qué puedo ayudarte?\n\n"
+                 "1️⃣ Reservar una cita 🗓️\n"
+                 "2️⃣ Conocer nuestras ofertas 💰\n"
+                 "3️⃣ Ubicación de la clínica 📍\n"
+                 "4️⃣ Hablar con un humano 👩‍⚕️")
         return str(resp)
 
-    # 📌 Consultas sobre ofertas
+    # **Ubicación**
+    if "ubicación" in incoming_msg or "dónde estáis" in incoming_msg:
+        msg.body(f"📍 Estamos en *{DIRECCION_CLINICA}*.\n📞 Teléfono: {TELEFONO_CLINICA}")
+        return str(resp)
+
+    # **Ofertas**
     if "oferta" in incoming_msg or "promoción" in incoming_msg:
-        ofertas = obtener_ofertas_facebook()
-        msg.body(ofertas if ofertas else "No se encontraron ofertas actuales.")
+        ofertas = obtener_ofertas()
+        msg.body("💰 Ofertas actuales:\n" + "\n".join(ofertas))
         return str(resp)
 
-    # 📌 Consultas sobre servicios
-    if "servicios" in incoming_msg or "qué ofrecen" in incoming_msg:
+    # **Servicios**
+    if "servicios" in incoming_msg or "tratamientos" in incoming_msg:
         servicios = obtener_servicios()
         if servicios:
-            lista_servicios = "\n".join(f"- {s}" for s in servicios.keys())
-            msg.body(f"Estos son nuestros servicios:\n{lista_servicios}")
+            msg.body("📋 Ofrecemos estos servicios:\n" + "\n".join(servicios.keys()))
         else:
-            msg.body("Actualmente no tengo información de los servicios. ¡Contáctanos!")
+            msg.body("No encontré información de los servicios.")
         return str(resp)
 
-    # 📌 Consultas generales → **Usar IA para responder**
-    respuesta_ia = generar_respuesta_ia(incoming_msg)
-    msg.body(respuesta_ia)
+    # **Flujo de reserva**
+    if "cita" in incoming_msg or "reservar" in incoming_msg:
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
+        msg.body("¡Genial! ¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉")
+        return str(resp)
+
+    if estado_usuario == "esperando_servicio":
+        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        msg.body("¿Para qué fecha deseas la cita? 📅 (Ejemplo: '2025-02-17')")
+        return str(resp)
+
+    if estado_usuario == "esperando_fecha":
+        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        msg.body("¿A qué hora prefieres? ⏰ (Ejemplo: '17:00')")
+        return str(resp)
+
+    if estado_usuario == "esperando_hora":
+        redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        msg.body("Voy a registrar tu cita. Un momento... ⏳")
+
+        servicio = redis_client.get(sender + "_servicio")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+
+        nota = f"Cita solicitada: {servicio} el {fecha} a las {hora}"
+        actualizar_notas_cliente(cliente_id, nota)
+        msg.body(f"✅ Cita para *{servicio}* registrada el *{fecha} a las {hora}*.")
+        return str(resp)
+
+    # **Respuesta por defecto**
+    if OPENAI_API_KEY:
+        respuesta_ia = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": incoming_msg}]
+        )
+        msg.body(respuesta_ia["choices"][0]["message"]["content"])
+    else:
+        msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
+    
     return str(resp)
 
 if __name__ == "__main__":
