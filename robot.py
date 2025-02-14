@@ -51,7 +51,8 @@ def buscar_cliente(telefono):
         if isinstance(clientes_data, list):
             for cliente in clientes_data:
                 if normalizar_telefono(cliente.get("movil", "")) == telefono:
-                    return cliente.get("id")
+                    print(f"✅ Cliente encontrado en Koibox: {cliente['id']}")
+                    return cliente["id"]
     print(f"⚠️ Cliente no encontrado en Koibox: {telefono}")
     return None
 
@@ -62,6 +63,10 @@ def crear_cliente(nombre, telefono):
     if len(telefono) > 16:
         print(f"❌ Error: Número de teléfono excede los 16 caracteres permitidos en Koibox: {telefono}")
         return None
+
+    cliente_id = buscar_cliente(telefono)
+    if cliente_id:
+        return cliente_id  # Si el cliente ya existe, lo reutilizamos
 
     datos_cliente = {
         "nombre": nombre,
@@ -76,17 +81,6 @@ def crear_cliente(nombre, telefono):
         print(f"✅ Cliente creado correctamente: {cliente_data}")
         return cliente_data.get("id")  
     print(f"❌ Error creando cliente en Koibox: {response.text}")
-    return None
-
-# 📌 **Buscar disponibilidad de agenda en Koibox**
-def obtener_disponibilidad():
-    url = f"{KOIBOX_URL}/agenda/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        citas = response.json()
-        if isinstance(citas, list) and len(citas) > 0:
-            return citas[:5]  # Devuelve las 5 próximas citas
     return None
 
 # 📌 **Obtener lista de servicios**
