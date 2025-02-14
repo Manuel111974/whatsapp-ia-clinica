@@ -44,52 +44,49 @@ def normalizar_telefono(telefono):
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
 
-    # 📌 Verificar primero en Redis
     cliente_id = redis_client.get(f"cliente_{telefono}")
     if cliente_id:
         return cliente_id
 
-    # 📌 Hacer una consulta exacta a Koibox
     url = f"{KOIBOX_URL}/clientes/?movil={telefono}"
     response = requests.get(url, headers=HEADERS)
 
     if response.status_code == 200:
         clientes_data = response.json()
-        
         if isinstance(clientes_data, list) and len(clientes_data) > 0:
             cliente_id = clientes_data[0].get("id")
-            redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
+            redis_client.set(f"cliente_{telefono}", cliente_id)
             return cliente_id
 
     return None
 
 # 🆕 **Crear cliente en Koibox**
-def crear_cliente(telefono):
+def crear_cliente(telefono, nombre):
     telefono = normalizar_telefono(telefono)
     
     datos_cliente = {
-        "nombre": "Cliente WhatsApp",
+        "nombre": nombre if nombre else "Cliente WhatsApp",
         "movil": telefono,
-        "notas": "Cliente registrado a través de WhatsApp con Gabriel IA."
+        "notas": f"Cliente registrado a través de WhatsApp con Gabriel IA. Nombre proporcionado: {nombre if nombre else 'No especificado'}."
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
     if response.status_code == 201:
         cliente_data = response.json()
         cliente_id = cliente_data.get("id")
-        redis_client.set(f"cliente_{telefono}", cliente_id)  # Guardar en cache
+        redis_client.set(f"cliente_{telefono}", cliente_id)
         return cliente_id  
     return None
 
 # 📆 **Crear cita en Koibox**
-def crear_cita(cliente_id, telefono, fecha, hora, servicio, notas):
+def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas):
     datos_cita = {
         "fecha": fecha,
         "hora_inicio": hora,
         "titulo": servicio,
         "notas": f"Cita agendada por Gabriel (IA).\n{notas}",
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id, "text": "Cliente WhatsApp", "movil": telefono},
+        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
         "estado": 1
     }
     
@@ -103,45 +100,50 @@ def crear_cita(cliente_id, telefono, fecha, hora, servicio, notas):
 # 📩 **Webhook para WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado") or ""
-    notas_usuario = redis_client.get(sender + "_notas") or ""
+    nombre_usuario = redis_client.get(sender + "_nombre") or ""
 
-    # 📌 **Registrar al usuario en Koibox si no existe**
+    # 📌 **Registrar cliente en Koibox si no existe**
     cliente_id = buscar_cliente(sender)
     if not cliente_id:
-        cliente_id = crear_cliente(sender)
+        cliente_id = crear_cliente(sender, nombre_usuario)
 
-    # 📌 **Flujo de agendamiento de cita**
+    # 📌 **Manejo de estados**
+    if "limpieza" in incoming_msg:
+        redis_client.set(sender + "_servicio", "Limpieza Bucodental")
+        redis_client.set(sender + "_estado", "esperando_nombre")
+        msg.body("¡Perfecto! Para agendar la cita, ¿puedes decirme tu nombre completo?")
+        return str(resp)
+
+    if estado_usuario == "esperando_nombre":
+        redis_client.set(sender + "_nombre", incoming_msg)
+        redis_client.set(sender + "_estado", "esperando_fecha")
+        msg.body(f"¡Gracias, {incoming_msg}! Ahora dime qué día y hora te viene bien para la limpieza bucodental.")
+        return str(resp)
+
+    if estado_usuario == "esperando_fecha":
+        redis_client.set(sender + "_fecha", incoming_msg)
+        redis_client.set(sender + "_estado", "confirmando_cita")
+        msg.body(f"¿Te confirmo la cita para el {incoming_msg}? Si es correcto, dime la hora.")
+        return str(resp)
+
     if estado_usuario == "confirmando_cita":
         fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
+        nombre = redis_client.get(sender + "_nombre")
         servicio = redis_client.get(sender + "_servicio")
-        notas = redis_client.get(sender + "_notas") or "Sin notas adicionales"
 
-        exito, mensaje = crear_cita(cliente_id, sender, fecha, hora, servicio, notas)
+        exito, mensaje = crear_cita(cliente_id, nombre, sender, fecha, incoming_msg, servicio, "Sin notas adicionales")
         msg.body(mensaje)
-
         redis_client.delete(sender + "_estado")
         return str(resp)
 
-    # 📌 **Manejar solicitud de ubicación**
-    if "ubicación" in incoming_msg or "dirección" in incoming_msg:
-        msg.body(f"📍 Estamos en {DIRECCION_CLINICA}\n\n📌 Ubicación en Google Maps: {GOOGLE_MAPS_LINK}")
-        return str(resp)
-
-    # 📌 **Almacenar notas relevantes**
-    if "nota" in incoming_msg or "recordar" in incoming_msg:
-        redis_client.set(sender + "_notas", incoming_msg)
-        msg.body("📝 Notado. Lo recordaré para tu próxima cita.")
-        return str(resp)
-
-    # 📌 **Conversación general con IA (asegurar siempre una respuesta)**
+    # 📌 **Conversación general**
     try:
         respuesta_ia = openai.ChatCompletion.create(
             model="gpt-4-turbo",
@@ -155,7 +157,7 @@ def webhook():
         msg.body(respuesta_final)
 
     except Exception as e:
-        print(f"⚠️ Error al generar respuesta de IA: {e}")
+        print(f"⚠️ Error en OpenAI: {e}")
         msg.body("Lo siento, en este momento no puedo responder. Inténtalo más tarde.")
 
     return str(resp)
