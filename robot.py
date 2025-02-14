@@ -27,7 +27,8 @@ HEADERS = {
 
 # 📌 ID del asistente Gabriel en Koibox
 GABRIEL_USER_ID = 1  
-DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo. 🔔 Pulsa 11 + campana en el telefonillo para subir."
+DIRECCION_CLINICA = "📍 Calle Colón 48, entresuelo, Valencia."
+GOOGLE_MAPS_LINK = "https://goo.gl/maps/xyz123"
 
 # 📌 **Normalizar formato del teléfono**
 def normalizar_telefono(telefono):
@@ -94,7 +95,7 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio, notas):
     
     if response.status_code == 201:
         print(f"✅ Cita creada correctamente en Koibox: {response.json()}")
-        return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}"
+        return True, f"✅ ¡Tu cita ha sido creada con éxito!\nNos vemos en {DIRECCION_CLINICA}\n📍 {GOOGLE_MAPS_LINK}"
     else:
         print(f"❌ Error creando cita en Koibox: {response.text}")
         return False, f"⚠️ No se pudo agendar la cita: {response.text}"
@@ -130,6 +131,11 @@ def webhook():
         msg.body(mensaje)
 
         redis_client.delete(sender + "_estado")
+        return str(resp)
+
+    # 📌 **Manejar solicitud de ubicación**
+    if "ubicación" in incoming_msg or "dirección" in incoming_msg:
+        msg.body(f"📍 Estamos en {DIRECCION_CLINICA}\n\n📌 Ubicación en Google Maps: {GOOGLE_MAPS_LINK}")
         return str(resp)
 
     # 📌 **Almacenar notas relevantes**
