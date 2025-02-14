@@ -6,3 +6,4 @@ langdetect
 dateparser
 redis
 rapidfuzz
+beautifulsoup4
