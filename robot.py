@@ -40,7 +40,7 @@ def obtener_ofertas():
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             ofertas = [element.get_text() for element in soup.find_all("div", class_="x1iorvi4")]
-            return ofertas[:3] if ofertas else ["No encontré ofertas activas."]
+            return ofertas[:3] if ofertas else [f"No encontré ofertas activas. Puedes verlas aquí: {FACEBOOK_URL}"]
     except Exception as e:
         return [f"Error al obtener ofertas: {str(e)}"]
 
@@ -51,10 +51,9 @@ def buscar_cliente(telefono):
 
     if response.status_code == 200:
         clientes_data = response.json()
-        if "results" in clientes_data and isinstance(clientes_data["results"], list):
-            for cliente in clientes_data["results"]:
-                if cliente.get("movil") == telefono:
-                    return cliente.get("id")
+        for cliente in clientes_data.get("results", []):
+            if cliente.get("movil") == telefono:
+                return cliente
     return None
 
 # 🆕 **Función para registrar notas en Koibox**
@@ -86,7 +85,7 @@ def webhook():
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado")
-    cliente_id = buscar_cliente(sender)
+    cliente = buscar_cliente(sender)
 
     # **Respuestas básicas**
     if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
@@ -137,15 +136,20 @@ def webhook():
 
     if estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        msg.body("Voy a registrar tu cita. Un momento... ⏳")
-
+        
+        if not cliente:
+            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+            msg.body("No encontré tu nombre en nuestra base de datos. ¿Cómo te llamas?")
+            return str(resp)
+        
         servicio = redis_client.get(sender + "_servicio")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
 
         nota = f"Cita solicitada: {servicio} el {fecha} a las {hora}"
-        actualizar_notas_cliente(cliente_id, nota)
-        msg.body(f"✅ Cita para *{servicio}* registrada el *{fecha} a las {hora}*.")
+        actualizar_notas_cliente(cliente["id"], nota)
+
+        msg.body(f"✅ Cita registrada para *{cliente['nombre']}*: {servicio} el *{fecha} a las {hora}*.")
         return str(resp)
 
     # **Respuesta por defecto**
