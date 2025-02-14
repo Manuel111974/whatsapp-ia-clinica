@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from rapidfuzz import process
+import openai  # 🔹 Ahora usa IA para respuestas más inteligentes
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -21,6 +22,9 @@ HEADERS = {
     "X-Koibox-Key": KOIBOX_API_KEY,
     "Content-Type": "application/json"
 }
+
+# Configuración de OpenAI (GPT)
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configuración de la Página de Facebook de Sonrisas Hollywood
 FACEBOOK_PAGE_URL = "https://www.facebook.com/share/1BeQpVyja5/?mibextid=wwXIfr"
@@ -79,67 +83,47 @@ def encontrar_servicio_mas_parecido(servicio_solicitado):
     mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
     return (servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}") if score > 75 else (None, "No encontré un servicio similar.")
 
-# 📆 Crear cita en Koibox y actualizar notas
-def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
-    servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
-    if not servicio_id:
-        return False, mensaje
-
-    datos_cita = {
-        "fecha": fecha,
-        "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),
-        "titulo": servicio_solicitado,
-        "notas": f"Cita agendada por Gabriel IA para {nombre} ({telefono})",
-        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
-        "servicios": [{"value": servicio_id}],
-        "estado": 1
-    }
-    
-    response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
-    
-    if response.status_code == 201:
-        actualizar_notas_cliente(cliente_id, f"Agendada cita para {fecha} a las {hora} - Servicio: {servicio_solicitado}")
-        return True, "✅ ¡Tu cita ha sido creada con éxito!"
-    return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-
-# ⏰ Calcular hora de finalización
-def calcular_hora_fin(hora_inicio, duracion_horas):
-    h, m = map(int, hora_inicio.split(":"))
-    h += duracion_horas
-    return f"{h:02d}:{m:02d}"
-
-# 📝 Actualizar notas en la ficha del cliente
-def actualizar_notas_cliente(cliente_id, nota):
-    url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
-    response = requests.get(url, headers=HEADERS)
+# 📥 Obtener ofertas desde Facebook
+def obtener_ofertas_facebook():
+    response = requests.get(FACEBOOK_PAGE_URL)
     if response.status_code == 200:
-        cliente_data = response.json()
-        notas_actuales = cliente_data.get("notas", "")
-        nuevas_notas = f"{notas_actuales}\n{nota}"
-        requests.put(url, headers=HEADERS, json={"notas": nuevas_notas})
+        soup = BeautifulSoup(response.text, "html.parser")
+        ofertas = [post.text.strip() for post in soup.find_all("div", class_="post-content") if "oferta" in post.text.lower()]
+        return "\n\n".join(ofertas) if ofertas else "No hay ofertas activas en este momento."
+    return "No se pudo acceder a la página de Facebook."
+
+# 🔹 **Usar IA para responder de forma natural**
+def generar_respuesta_ia(mensaje):
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "system", "content": "Eres un asistente de una clínica de odontología estética. Responde con amabilidad y profesionalismo."},
+                  {"role": "user", "content": mensaje}]
+    )
+    return response["choices"][0]["message"]["content"]
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    # 📌 Responder ubicación
+    estado_usuario = redis_client.get(sender + "_estado")
+
+    # 📌 Consultas sobre ubicación
     if "dónde" in incoming_msg or "ubicación" in incoming_msg:
         msg.body(INFO_CLINICA)
         return str(resp)
 
-    # 📌 Si el usuario pregunta por ofertas
+    # 📌 Consultas sobre ofertas
     if "oferta" in incoming_msg or "promoción" in incoming_msg:
         ofertas = obtener_ofertas_facebook()
         msg.body(ofertas if ofertas else "No se encontraron ofertas actuales.")
         return str(resp)
 
-    # 📌 Si el usuario pregunta por servicios
+    # 📌 Consultas sobre servicios
     if "servicios" in incoming_msg or "qué ofrecen" in incoming_msg:
         servicios = obtener_servicios()
         if servicios:
@@ -149,24 +133,10 @@ def webhook():
             msg.body("Actualmente no tengo información de los servicios. ¡Contáctanos!")
         return str(resp)
 
-    # 📌 Si el usuario quiere reservar una cita
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
-        return str(resp)
-
-    # 📌 Respuesta general
-    msg.body("¡Hola! Soy Gabriel, el asistente de Sonrisas Hollywood. ¿Cómo puedo ayudarte? 😊")
+    # 📌 Consultas generales → **Usar IA para responder**
+    respuesta_ia = generar_respuesta_ia(incoming_msg)
+    msg.body(respuesta_ia)
     return str(resp)
-
-# 📥 Obtener ofertas desde Facebook
-def obtener_ofertas_facebook():
-    response = requests.get(FACEBOOK_PAGE_URL)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        ofertas = [post.text.strip() for post in soup.find_all("div", class_="post-content") if "oferta" in post.text.lower()]
-        return "\n\n".join(ofertas) if ofertas else "No hay ofertas activas en este momento."
-    return "No se pudo acceder a la página de Facebook."
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
