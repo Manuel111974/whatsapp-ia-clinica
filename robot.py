@@ -1,14 +1,13 @@
 import os
 import redis
 import requests
-import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
 # 🔧 Configuración de Flask
 app = Flask(__name__)
 
-# 🔧 Configuración de Redis (Memoria para recordar conversaciones)
+# 🔧 Configuración de Redis para memoria de conversación
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -20,26 +19,23 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔧 Configuración de OpenAI para IA más flexible
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
-
-# 📌 ID de usuario en Koibox
-GABRIEL_USER_ID = 1  
-
 # 📌 Lista de tratamientos de Sonrisas Hollywood
 TRATAMIENTOS = {
-    "hilos tensores": "Los hilos tensores son un tratamiento estético que ayuda a reafirmar y rejuvenecer la piel sin cirugía.",
-    "botox": "El Botox es un tratamiento para suavizar arrugas y líneas de expresión, dejando un aspecto natural y rejuvenecido.",
-    "ortodoncia invisible": "La ortodoncia invisible, como Invisalign, permite alinear tus dientes sin los brackets tradicionales.",
-    "limpieza dental": "La limpieza dental profesional elimina placa y sarro, manteniendo tu sonrisa sana y radiante.",
+    "hilos tensores": "Los hilos tensores ayudan a reafirmar y rejuvenecer la piel sin cirugía.",
+    "botox": "El Botox suaviza arrugas y líneas de expresión, proporcionando un efecto natural.",
+    "ortodoncia invisible": "La ortodoncia invisible como Invisalign alinea los dientes sin brackets.",
+    "limpieza dental": "La limpieza dental profesional elimina placa y sarro, manteniendo tu sonrisa sana.",
 }
+
+# 📌 Lista de palabras clave para saludos y despedidas
+SALUDOS = ["hola", "buenos días", "buenas tardes", "buenas noches", "hey", "qué tal"]
+DESPEDIDAS = ["gracias", "ok", "vale", "adiós", "hasta luego"]
 
 # 📌 Función para normalizar teléfonos
 def normalizar_telefono(telefono):
     return telefono.strip().replace(" ", "").replace("-", "")
 
-# 🔍 Buscar cliente en Koibox
+# 📌 Buscar cliente en Koibox
 def buscar_cliente(telefono):
     telefono = normalizar_telefono(telefono)
     url = f"{KOIBOX_URL}/clientes/"
@@ -52,7 +48,7 @@ def buscar_cliente(telefono):
                 return cliente.get("id")
     return None
 
-# 🆕 Crear cliente en Koibox
+# 📌 Crear cliente en Koibox
 def crear_cliente(nombre, telefono):
     telefono = normalizar_telefono(telefono)
     datos_cliente = {
@@ -85,7 +81,6 @@ def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio):
         "hora_fin": calcular_hora_fin(hora, 1),
         "titulo": servicio,
         "notas": f"Cita creada por Gabriel IA para {servicio}.",
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
         "cliente": {
             "value": cliente_id,
             "text": nombre,
@@ -114,7 +109,17 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # **Si el usuario pregunta por un tratamiento, Gabriel responde directamente**
+    # 📌 Responder a saludos
+    if incoming_msg in SALUDOS:
+        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+        return str(resp)
+
+    # 📌 Responder a despedidas
+    if incoming_msg in DESPEDIDAS:
+        msg.body("¡De nada! Si necesitas algo más, aquí estoy. 😊")
+        return str(resp)
+
+    # 📌 Si el usuario pregunta por un tratamiento, Gabriel responde directamente
     for tratamiento in TRATAMIENTOS:
         if tratamiento in incoming_msg:
             msg.body(TRATAMIENTOS[tratamiento])
