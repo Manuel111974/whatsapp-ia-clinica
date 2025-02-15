@@ -4,7 +4,6 @@ import requests
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from rapidfuzz import process
-from datetime import datetime
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -24,81 +23,18 @@ HEADERS = {
 # ID de Gabriel en Koibox (REEMPLAZAR CON EL REAL)
 GABRIEL_USER_ID = 1  
 
-# Función para normalizar teléfonos
-def normalizar_telefono(telefono):
-    telefono = telefono.strip().replace(" ", "").replace("-", "")
-    if not telefono.startswith("+34"):  
-        telefono = "+34" + telefono
-    return telefono
-
-# 🔍 Buscar cliente en Koibox
-def buscar_cliente(telefono):
-    telefono = normalizar_telefono(telefono)
-    url = f"{KOIBOX_URL}/clientes/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        clientes_data = response.json()
-        for cliente in clientes_data.get("results", []):
-            if normalizar_telefono(cliente.get("movil")) == telefono:
-                return cliente.get("id")
-    return None
-
-# 🆕 Crear cliente en Koibox
-def crear_cliente(nombre, telefono):
-    telefono = normalizar_telefono(telefono)
-    datos_cliente = {
-        "nombre": nombre,
-        "movil": telefono,
-        "notas": "Cliente registrado por Gabriel IA.",
-        "is_anonymous": False
-    }
-    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
-    
-    if response.status_code == 201:
-        return response.json().get("id")
-    return None
-
-# 📄 Obtener lista de servicios desde Koibox
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
-    if response.status_code == 200:
-        return {s["nombre"]: s["id"] for s in response.json().get("results", [])}
-    return {}
-
-# 🔍 Seleccionar el servicio más parecido
-def encontrar_servicio_mas_parecido(servicio_solicitado):
-    servicios = obtener_servicios()
-    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys()) if servicios else (None, 0, None)
-    return (servicios[mejor_match], f"Se ha seleccionado: {mejor_match}") if score > 75 else (None, "No encontré un servicio similar.")
-
-# 📆 Crear cita en Koibox
-def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
-    servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
-    if not servicio_id:
-        return False, mensaje
-
-    datos_cita = {
-        "fecha": fecha,
-        "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),
-        "titulo": servicio_solicitado,
-        "notas": f"Cita agendada por Gabriel IA para {nombre}.",
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
-        "servicios": [{"value": servicio_id}],
-        "estado": 1
-    }
-    
-    response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
-    return (True, "✅ ¡Tu cita ha sido creada con éxito!") if response.status_code == 201 else (False, f"⚠️ No se pudo agendar la cita: {response.text}")
-
-# ⏰ Calcular hora de finalización
-def calcular_hora_fin(hora_inicio, duracion_horas):
-    h, m = map(int, hora_inicio.split(":"))
-    h += duracion_horas
-    return f"{h:02d}:{m:02d}"
+# Lista de servicios disponibles (Evita que no los reconozca)
+SERVICIOS_DISPONIBLES = {
+    "ortodoncia invisible": "Ortodoncia Invisible (Invisalign)",
+    "invisalign": "Ortodoncia Invisible (Invisalign)",
+    "diseño de sonrisa": "Diseño de Sonrisa",
+    "carillas dentales": "Carillas Dentales",
+    "botox": "Botox Estético",
+    "ácido hialurónico": "Ácido Hialurónico",
+    "hilos tensores": "Hilos Tensores",
+    "implantes dentales": "Implantes Dentales",
+    "limpieza dental": "Limpieza Dental Profesional"
+}
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -111,12 +47,18 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # 📌 Respuestas a saludos
+    # 📌 Saludos
     if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
         msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
         return str(resp)
 
-    # 📌 Información sobre ubicación
+    # 📌 Información sobre servicios
+    for key, servicio in SERVICIOS_DISPONIBLES.items():
+        if key in incoming_msg:
+            msg.body(f"Sí, ofrecemos {servicio}. ¿Te gustaría más información o agendar una cita? 😊")
+            return str(resp)
+
+    # 📌 Ubicación
     if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
         msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. ¡Te esperamos! 😊")
         return str(resp)
@@ -124,6 +66,7 @@ def webhook():
     # 📌 Información sobre ofertas
     if "oferta" in incoming_msg:
         msg.body("💰 Puedes ver nuestras ofertas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢")
+        redis_client.set(sender + "_mencion_oferta", "Sí", ex=600)
         return str(resp)
 
     # 📌 Flujo de citas
@@ -156,8 +99,58 @@ def webhook():
         msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
         return str(resp)
 
+    if estado_usuario == "esperando_servicio":
+        servicio = incoming_msg
+        redis_client.set(sender + "_servicio", servicio, ex=600)
+
+        # 📌 Guardar notas en Koibox
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+        mencion_oferta = redis_client.get(sender + "_mencion_oferta")
+
+        notas = f"Solicitud de cita: {servicio}. Fecha: {fecha} - Hora: {hora}."
+        if mencion_oferta:
+            notas += " 📌 El paciente mencionó una oferta."
+
+        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+        if cliente_id:
+            actualizar_notas(cliente_id, notas)
+            msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
+        else:
+            msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
+
+        return str(resp)
+
+    # 📌 Respuesta por defecto
     msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
+# 🔍 Buscar cliente en Koibox
+def buscar_cliente(telefono):
+    telefono = telefono.strip().replace(" ", "").replace("-", "")
+    url = f"{KOIBOX_URL}/clientes/"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        clientes_data = response.json()
+        for cliente in clientes_data.get("results", []):
+            if cliente.get("movil") == telefono:
+                return cliente.get("id")
+    return None
+
+# 🆕 Crear cliente en Koibox
+def crear_cliente(nombre, telefono):
+    datos_cliente = {"nombre": nombre, "movil": telefono, "notas": "Cliente registrado por Gabriel IA."}
+    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
+    return response.json().get("id") if response.status_code == 201 else None
+
+# 📝 Actualizar notas en Koibox
+def actualizar_notas(cliente_id, notas):
+    url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
+    response = requests.patch(url, headers=HEADERS, json={"notas": notas})
+    return response.status_code == 200
+
+# 🚀 Lanzar aplicación
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
