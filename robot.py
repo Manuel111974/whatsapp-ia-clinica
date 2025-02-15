@@ -3,76 +3,94 @@ import redis
 import requests
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from datetime import datetime
-from rapidfuzz import process
 
-# Configuración de Flask
+# 🔧 Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis (memoria para Gabriel)
+# 🔧 Configuración de Redis (memoria para Gabriel)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Configuración de Koibox
+# 🔧 Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/api"
-HEADERS = {"X-Koibox-Key": KOIBOX_API_KEY, "Content-Type": "application/json"}
+HEADERS = {
+    "X-Koibox-Key": KOIBOX_API_KEY,
+    "Content-Type": "application/json"
+}
 
-# ID de Gabriel en Koibox
+# 📌 ID de usuario para registrar las citas en Koibox (modificar si es necesario)
 GABRIEL_USER_ID = 1  
 
-# URL de ofertas de Facebook
-OFERTAS_URL = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
-
-# 📌 **Normalización de teléfonos**
+# 📌 Función para normalizar teléfonos
 def normalizar_telefono(telefono):
-    return f"+34{telefono[-9:]}" if not telefono.startswith("+34") else telefono
+    return telefono.strip().replace(" ", "").replace("-", "")
 
-# 📌 **Buscar cliente en Koibox**
+# 🔍 Buscar cliente en Koibox
 def buscar_cliente(telefono):
-    response = requests.get(f"{KOIBOX_URL}/clientes/", headers=HEADERS)
-    return next((c["id"] for c in response.json().get("results", []) if normalizar_telefono(c["movil"]) == telefono), None)
+    telefono = normalizar_telefono(telefono)
+    url = f"{KOIBOX_URL}/clientes/"
+    response = requests.get(url, headers=HEADERS)
 
-# 📌 **Crear cliente en Koibox**
+    if response.status_code == 200:
+        clientes = response.json().get("results", [])
+        for cliente in clientes:
+            if normalizar_telefono(cliente.get("movil")) == telefono:
+                return cliente.get("id")
+    return None
+
+# 🆕 Crear cliente en Koibox
 def crear_cliente(nombre, telefono):
-    datos = {"nombre": nombre, "movil": normalizar_telefono(telefono), "is_active": True, "notas": "Registrado por Gabriel IA"}
-    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos)
+    telefono = normalizar_telefono(telefono)
+    datos_cliente = {
+        "nombre": nombre,
+        "movil": telefono,
+        "notas": "Registrado por Gabriel IA",
+        "is_active": True,
+        "is_anonymous": False
+    }
+    response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     return response.json().get("id") if response.status_code == 201 else None
 
-# 📌 **Obtener lista de servicios en Koibox**
-def obtener_servicios():
-    response = requests.get(f"{KOIBOX_URL}/servicios/", headers=HEADERS)
-    return {s["nombre"]: s["id"] for s in response.json().get("results", [])} if response.status_code == 200 else {}
+# 📌 Guardar notas en la ficha del paciente en Koibox
+def actualizar_notas_cliente(cliente_id, nueva_nota):
+    url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
+    response = requests.get(url, headers=HEADERS)
+    
+    if response.status_code == 200:
+        datos_cliente = response.json()
+        notas_actuales = datos_cliente.get("notas", "")
+        notas_actualizadas = f"{notas_actuales}\n{nueva_nota}"
+        datos_cliente["notas"] = notas_actualizadas
+        requests.put(url, headers=HEADERS, json=datos_cliente)
 
-# 📌 **Buscar servicio en Koibox**
-def encontrar_servicio(servicio_solicitado):
-    servicios = obtener_servicios()
-    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys()) if servicios else (None, 0, None)
-    return servicios.get(mejor_match) if score > 75 else None
-
-# 📌 **Registrar cita en Koibox**
-def registrar_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado):
-    servicio_id = encontrar_servicio(servicio_solicitado)
-    if not servicio_id:
-        return False, "No encontré ese tratamiento en el sistema. ¿Puedes especificarlo mejor? 😊"
-
+# 📆 Crear cita en Koibox
+def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio):
     datos_cita = {
-        "fecha": fecha, "hora_inicio": hora, "hora_fin": calcular_hora_fin(hora, 1),
-        "titulo": servicio_solicitado, "notas": f"Cita agendada por Gabriel IA - {servicio_solicitado}",
+        "fecha": fecha,
+        "hora_inicio": hora,
+        "hora_fin": calcular_hora_fin(hora, 1),
+        "titulo": servicio,
+        "notas": f"Cita creada por Gabriel IA para {servicio}.",
         "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
-        "servicios": [{"value": servicio_id}], "estado": 1
+        "cliente": {
+            "value": cliente_id,
+            "text": nombre,
+            "movil": telefono
+        },
+        "estado": 1
     }
+    
     response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
-    return (True, "✅ Tu cita ha sido confirmada.") if response.status_code == 201 else (False, response.text)
+    return response.status_code == 201
 
-# 📌 **Calcular la hora de fin de la cita**
+# ⏰ Calcular hora de finalización
 def calcular_hora_fin(hora_inicio, duracion_horas):
     h, m = map(int, hora_inicio.split(":"))
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 📩 **Webhook de WhatsApp**
+# 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip().lower()
@@ -83,51 +101,39 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # 🔹 **Respuestas flexibles**
-    if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
+    # 🧠 Memoria de Gabriel
+    if incoming_msg in ["hola", "buenos días", "buenas tardes", "qué tal"]:
         msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
         return str(resp)
 
-    if "quién eres" in incoming_msg:
-        msg.body("Soy Gabriel, el asistente de Sonrisas Hollywood. Te ayudo a reservar citas, informarte sobre tratamientos y responder tus dudas. 😊")
-        return str(resp)
-
-    if "ubicación" in incoming_msg or "dónde están" in incoming_msg:
-        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. ¡Te esperamos!")
-        return str(resp)
-
-    if "ofertas" in incoming_msg:
-        msg.body(f"💰 Puedes ver nuestras ofertas aquí: {OFERTAS_URL} 📢")
-        return str(resp)
-
-    # 🔹 **Reserva de citas**
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
+    # 📌 Flujo de reservas
+    if "cita" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        msg.body("¡Genial! ¿Cuál es tu nombre completo? 😊")
+        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
         return str(resp)
 
     if estado_usuario == "esperando_nombre":
         redis_client.set(sender + "_nombre", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        msg.body("Gracias. Ahora dime tu número de teléfono 📞.")
+        msg.body(f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞.")
         return str(resp)
 
     if estado_usuario == "esperando_telefono":
         redis_client.set(sender + "_telefono", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        msg.body("¿Qué día prefieres? 📅")
+        msg.body("¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-14')")
         return str(resp)
 
     if estado_usuario == "esperando_fecha":
         redis_client.set(sender + "_fecha", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        msg.body("¿A qué hora prefieres? ⏰")
+        msg.body("Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '11:00')")
         return str(resp)
 
     if estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
-        msg.body("¿Qué tratamiento necesitas? 💉")
+        msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
         return str(resp)
 
     if estado_usuario == "esperando_servicio":
@@ -140,9 +146,17 @@ def webhook():
         servicio = redis_client.get(sender + "_servicio")
 
         cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-        exito, mensaje = registrar_cita(cliente_id, nombre, telefono, fecha, hora, servicio) if cliente_id else (False, "Error al registrar la cita.")
 
-        msg.body(mensaje)
+        if cliente_id:
+            exito = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio)
+            if exito:
+                actualizar_notas_cliente(cliente_id, f"Cita para {servicio} el {fecha} a las {hora}.")
+                msg.body(f"✅ Cita registrada para {servicio} el {fecha} a las {hora}. ¡Nos vemos pronto! 😊")
+            else:
+                msg.body("⚠️ No se pudo registrar la cita. Inténtalo de nuevo.")
+        else:
+            msg.body("⚠️ No pude registrar tu cita porque no se pudo crear el cliente.")
+
         return str(resp)
 
     msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
