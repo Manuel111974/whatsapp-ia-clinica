@@ -28,6 +28,18 @@ UBICACION_CLINICA = "📍 Calle Colón 48, Valencia."
 GOOGLE_MAPS_LINK = "https://g.co/kgs/U5uMgPg"
 OFERTAS_LINK = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
+# Función para llamar a OpenAI y generar respuestas
+def consultar_openai(mensaje):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",  # Ajusta el modelo según disponibilidad y costos
+            messages=[{"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde de manera profesional y amable."},
+                      {"role": "user", "content": mensaje}]
+        )
+        return response["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return "Lo siento, no pude procesar tu consulta en este momento. Inténtalo más tarde. 😊"
+
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -129,8 +141,6 @@ def webhook():
 
     if estado_usuario == "esperando_servicio":
         redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-        
-        # 📌 Guardar en Koibox
         cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
         notas = f"Solicitud de cita para {servicio}. Fecha: {fecha} - Hora: {hora}."
 
