@@ -3,12 +3,11 @@ import redis
 import requests
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from rapidfuzz import process
 
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis (memoria de Gabriel)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -20,10 +19,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID de Gabriel en Koibox (REEMPLAZAR CON EL REAL)
+# ID de Gabriel en Koibox (Reemplazar con el real)
 GABRIEL_USER_ID = 1  
 
-# Lista de servicios disponibles (Evita que no los reconozca)
+# Lista de servicios reconocidos
 SERVICIOS_DISPONIBLES = {
     "ortodoncia invisible": "Ortodoncia Invisible (Invisalign)",
     "invisalign": "Ortodoncia Invisible (Invisalign)",
@@ -52,10 +51,17 @@ def webhook():
         msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
         return str(resp)
 
+    # 📌 Si ya estamos en un flujo de cita, no repetimos el servicio
+    servicio_guardado = redis_client.get(sender + "_servicio")
+
     # 📌 Información sobre servicios
     for key, servicio in SERVICIOS_DISPONIBLES.items():
         if key in incoming_msg:
-            msg.body(f"Sí, ofrecemos {servicio}. ¿Te gustaría más información o agendar una cita? 😊")
+            if servicio_guardado:
+                msg.body(f"Ya has seleccionado {servicio_guardado}. ¿Quieres continuar con la cita?")
+            else:
+                redis_client.set(sender + "_servicio", servicio, ex=600)
+                msg.body(f"Sí, ofrecemos {servicio}. ¿Te gustaría más información o agendar una cita? 😊")
             return str(resp)
 
     # 📌 Ubicación
