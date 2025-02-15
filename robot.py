@@ -1,7 +1,6 @@
 import os
 import redis
 import requests
-from rapidfuzz import process
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -94,10 +93,14 @@ def webhook():
 
     cliente_id = buscar_cliente(telefono) or crear_cliente("Paciente WhatsApp", telefono)
 
-    # 📌 Respuestas a saludos
+    # 📌 Respuestas más naturales a saludos
     saludos = ["hola", "buenas", "qué tal", "hey"]
     if incoming_msg in saludos:
-        msg.body(f"¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+        if not redis_client.get(f"{telefono}_saludo"):
+            msg.body(f"¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+            redis_client.set(f"{telefono}_saludo", "1", ex=600)
+        else:
+            msg.body("¡Hola de nuevo! ¿En qué puedo ayudarte esta vez?")
         return str(resp)
 
     # 📌 Pregunta sobre ofertas
