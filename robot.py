@@ -1,6 +1,7 @@
 import os
 import redis
 import requests
+import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -10,6 +11,10 @@ app = Flask(__name__)
 # Configuración de Redis (memoria de Gabriel)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+# Configuración de OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 # Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
@@ -40,13 +45,19 @@ def webhook():
 
     # 📌 Información sobre ubicación
     if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. ¡Te esperamos! 😊")
+        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. También puedes vernos aquí: https://g.co/kgs/U5uMgPg 😊")
         return str(resp)
 
     # 📌 Información sobre ofertas
     if "oferta" in incoming_msg or "promoción" in incoming_msg:
         msg.body("💰 Puedes ver nuestras ofertas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢")
         redis_client.set(sender + "_mencion_oferta", "Sí", ex=600)
+        return str(resp)
+
+    # 📌 Uso de OpenAI para responder preguntas generales sobre tratamientos
+    if any(x in incoming_msg for x in ["diseño de sonrisa", "ortodoncia", "botox", "hilos tensores", "implantes"]):
+        respuesta = consultar_openai(incoming_msg)
+        msg.body(respuesta)
         return str(resp)
 
     # 📌 Flujo de citas
@@ -103,8 +114,9 @@ def webhook():
 
         return str(resp)
 
-    # 📌 Respuesta por defecto
-    msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
+    # 📌 Respuesta inteligente con OpenAI si no hay coincidencia
+    respuesta_ia = consultar_openai(incoming_msg)
+    msg.body(respuesta_ia)
     return str(resp)
 
 # 🔍 Buscar cliente en Koibox
@@ -130,6 +142,18 @@ def actualizar_notas(cliente_id, notas):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.patch(url, headers=HEADERS, json={"notas": notas})
     return response.status_code == 200
+
+# 🧠 Consultar OpenAI
+def consultar_openai(pregunta):
+    try:
+        respuesta = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": "Eres un asistente de una clínica estética y dental llamado Gabriel."},
+                      {"role": "user", "content": pregunta}]
+        )
+        return respuesta["choices"][0]["message"]["content"].strip()
+    except:
+        return "Lo siento, no tengo información sobre eso en este momento."
 
 # 🚀 Lanzar aplicación
 if __name__ == "__main__":
