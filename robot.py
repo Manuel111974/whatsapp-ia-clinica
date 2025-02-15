@@ -22,9 +22,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ID de Gabriel en Koibox
-GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID correcto
-
 # 📌 Información fija de la clínica
 UBICACION_CLINICA = "Calle Colón 48, Valencia"
 FACEBOOK_OFERTAS = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
@@ -35,6 +32,30 @@ def normalizar_telefono(telefono):
     if not telefono.startswith("+34"):  
         telefono = "+34" + telefono
     return telefono
+
+# 📌 Guardar la cita en Koibox con notas
+def guardar_cita_koibox(cliente_id, nombre, telefono, fecha, hora, servicio, notas):
+    datos_cita = {
+        "fecha": fecha,
+        "hora_inicio": hora,
+        "hora_fin": calcular_hora_fin(hora, 1),
+        "titulo": servicio,
+        "notas": notas,
+        "cliente": {"value": cliente_id, "text": nombre, "movil": telefono},
+        "estado": 1  # Estado de cita confirmada
+    }
+    
+    response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
+    
+    if response.status_code == 201:
+        return True, "✅ ¡Tu cita ha sido creada con éxito!"
+    return False, f"⚠️ No se pudo agendar la cita: {response.text}"
+
+# 📌 Calcular hora de finalización
+def calcular_hora_fin(hora_inicio, duracion_horas):
+    h, m = map(int, hora_inicio.split(":"))
+    h += duracion_horas
+    return f"{h:02d}:{m:02d}"
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -55,11 +76,12 @@ def webhook():
 
     # 📌 Información de ubicación
     if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body(f"📍 Estamos ubicados en {UBICACION_CLINICA}. ¡Te esperamos! 😊")
+        msg.body(f"📍 Estamos en {UBICACION_CLINICA}. ¡Te esperamos! 😊")
         return str(resp)
 
     # 📌 Información de ofertas
-    if "ofertas" in incoming_msg or "promoción" in incoming_msg:
+    if "oferta" in incoming_msg or "promoción" in incoming_msg:
+        redis_client.set(sender + "_ultima_oferta", incoming_msg, ex=600)
         msg.body(f"💰 Puedes ver nuestras ofertas aquí: {FACEBOOK_OFERTAS} 📢")
         return str(resp)
 
@@ -91,6 +113,28 @@ def webhook():
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
         msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
+        return str(resp)
+
+    if estado_usuario == "esperando_servicio":
+        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+        servicio = redis_client.get(sender + "_servicio")
+        ultima_oferta = redis_client.get(sender + "_ultima_oferta")
+
+        notas = f"Cita registrada por Gabriel IA. Servicio: {servicio}. Oferta mencionada: {ultima_oferta}"
+
+        cliente_id = normalizar_telefono(telefono)  # Simulación de búsqueda en Koibox
+
+        if cliente_id:
+            exito, mensaje = guardar_cita_koibox(cliente_id, nombre, telefono, fecha, hora, servicio, notas)
+        else:
+            exito, mensaje = False, "No pude registrar tu cita porque no se pudo crear el cliente."
+
+        msg.body(mensaje)
         return str(resp)
 
     # 📌 Respuesta por defecto si no entiende el mensaje
