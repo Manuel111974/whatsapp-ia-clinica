@@ -1,18 +1,18 @@
 import os
 import redis
 import requests
-from rapidfuzz import process
+import json
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
-# 🔹 Configuración de Flask
+# Configuración de Flask
 app = Flask(__name__)
 
-# 🔹 Configuración de Redis para la memoria de Gabriel
+# Configuración de Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# 🔹 Configuración de Koibox API
+# Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
 KOIBOX_URL = "https://api.koibox.cloud/api"
 
@@ -21,8 +21,11 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔹 ID de Gabriel en Koibox
-GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID correcto
+# ID de Gabriel en Koibox (MODIFICAR SI ES NECESARIO)
+GABRIEL_USER_ID = 1  
+
+# URL de las ofertas de Facebook
+OFERTAS_URL = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
 # 📌 Función para normalizar teléfonos
 def normalizar_telefono(telefono):
@@ -46,7 +49,7 @@ def buscar_cliente(telefono):
     return None
 
 # 🆕 Crear cliente en Koibox
-def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA"):
+def crear_cliente(nombre, telefono, notas=""):
     telefono = normalizar_telefono(telefono)
     datos_cliente = {
         "nombre": nombre,
@@ -60,85 +63,38 @@ def crear_cliente(nombre, telefono, notas="Cliente registrado por Gabriel IA"):
         return response.json().get("id")
     return None
 
-# 📄 Obtener lista de servicios desde Koibox
-def obtener_servicios():
-    url = f"{KOIBOX_URL}/servicios/"
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code == 200:
-        servicios_data = response.json()
-        if "results" in servicios_data and isinstance(servicios_data["results"], list):
-            return {s["nombre"]: s["id"] for s in servicios_data["results"]}
-    return {}
-
-# 🔍 Seleccionar el servicio más parecido
-def encontrar_servicio_mas_parecido(servicio_solicitado):
-    servicios = obtener_servicios()
-    if not servicios:
-        return None, "No hay servicios disponibles."
-
-    mejor_match, score, _ = process.extractOne(servicio_solicitado, servicios.keys())
-
-    if score > 75:
-        return servicios[mejor_match], f"Se ha seleccionado el servicio más parecido: {mejor_match}"
-    
-    return None, "No encontré un servicio similar."
-
-# 📆 Crear cita en Koibox
-def crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio_solicitado, notas="Cita agendada por Gabriel (IA)"):
-    servicio_id, mensaje = encontrar_servicio_mas_parecido(servicio_solicitado)
-
-    if not servicio_id:
-        return False, mensaje
-
-    datos_cita = {
-        "fecha": fecha,
-        "hora_inicio": hora,
-        "hora_fin": calcular_hora_fin(hora, 1),
-        "titulo": servicio_solicitado,
-        "notas": notas,
-        "user": {"value": GABRIEL_USER_ID, "text": "Gabriel Asistente IA"},
-        "cliente": {
-            "value": cliente_id,
-            "text": nombre,
-            "movil": telefono
-        },
-        "servicios": [{"value": servicio_id}],
-        "estado": 1
-    }
-    
-    response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
-    
-    if response.status_code == 201:
-        return True, "✅ ¡Tu cita ha sido creada con éxito!"
-    return False, f"⚠️ No se pudo agendar la cita: {response.text}"
-
-# ⏰ Calcular hora de finalización
-def calcular_hora_fin(hora_inicio, duracion_horas):
-    h, m = map(int, hora_inicio.split(":"))
-    h += duracion_horas
-    return f"{h:02d}:{m:02d}"
-
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip().lower()
-    sender = request.values.get("From", "").replace("whatsapp:", "")
+    sender = normalizar_telefono(request.values.get("From", "").replace("whatsapp:", ""))
 
     resp = MessagingResponse()
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # 📌 Respuestas mejoradas con IA
+    # 📌 Respuestas básicas
     if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
-        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?\n\n1️⃣ Reservar una cita 🗓️\n2️⃣ Conocer nuestras ofertas 💰\n3️⃣ Ubicación de la clínica 📍\n4️⃣ Hablar con un humano 👩‍⚕️")
         return str(resp)
 
+    if incoming_msg in ["gracias", "ok", "vale"]:
+        msg.body("¡De nada! Si necesitas algo más, aquí estoy. 😊")
+        return str(resp)
+
+    # 📌 Información de Ofertas
     if "oferta" in incoming_msg:
-        msg.body("💰 Puedes ver nuestras ofertas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢")
+        msg.body(f"💰 Puedes ver nuestras ofertas aquí: {OFERTAS_URL} 📢")
+        redis_client.set(sender + "_ultima_interaccion", f"Preguntó por ofertas: {incoming_msg}", ex=3600)
         return str(resp)
 
+    # 📌 Ubicación
+    if "ubicación" in incoming_msg or "dónde estáis" in incoming_msg:
+        msg.body("📍 Estamos en Calle Colón 48, Valencia. ¡Ven a visitarnos! 😊")
+        return str(resp)
+
+    # 📌 Flujo de citas
     if "cita" in incoming_msg or "reservar" in incoming_msg:
         redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
         msg.body("¡Genial! Primero dime tu nombre completo 😊.")
@@ -164,9 +120,31 @@ def webhook():
 
     if estado_usuario == "esperando_hora":
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
         msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
         return str(resp)
 
+    if estado_usuario == "esperando_servicio":
+        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+        servicio = redis_client.get(sender + "_servicio")
+
+        notas = f"Cita solicitada para {fecha} a las {hora}. Servicio: {servicio}."
+
+        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono, notas)
+
+        if cliente_id:
+            msg.body("✅ ¡Tu cita ha sido registrada en tu ficha de paciente en Koibox!")
+        else:
+            msg.body("⚠️ No pude registrar tu cita. Contacta con la clínica para confirmación.")
+
+        return str(resp)
+
+    # 📌 Respuesta por defecto
     msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
