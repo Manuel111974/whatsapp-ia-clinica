@@ -8,7 +8,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # 🔧 Configuración de Flask
 app = Flask(__name__)
 
-# 🔧 Configuración de Redis (memoria a corto plazo para recordar las conversaciones)
+# 🔧 Configuración de Redis (Memoria para recordar conversaciones)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -20,12 +20,20 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔧 Configuración de OpenAI (para mejorar respuestas)
+# 🔧 Configuración de OpenAI para IA más flexible
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# 📌 ID de usuario para registrar las citas en Koibox
+# 📌 ID de usuario en Koibox
 GABRIEL_USER_ID = 1  
+
+# 📌 Lista de tratamientos de Sonrisas Hollywood
+TRATAMIENTOS = {
+    "hilos tensores": "Los hilos tensores son un tratamiento estético que ayuda a reafirmar y rejuvenecer la piel sin cirugía.",
+    "botox": "El Botox es un tratamiento para suavizar arrugas y líneas de expresión, dejando un aspecto natural y rejuvenecido.",
+    "ortodoncia invisible": "La ortodoncia invisible, como Invisalign, permite alinear tus dientes sin los brackets tradicionales.",
+    "limpieza dental": "La limpieza dental profesional elimina placa y sarro, manteniendo tu sonrisa sana y radiante.",
+}
 
 # 📌 Función para normalizar teléfonos
 def normalizar_telefono(telefono):
@@ -95,22 +103,6 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
-# 🤖 **Función para generar respuestas con IA**
-def generar_respuesta_ia(mensaje_usuario):
-    prompt = f"""
-    Eres Gabriel, un asistente IA de Sonrisas Hollywood. Responde a las preguntas de los pacientes de manera profesional y amigable.
-    
-    Paciente: {mensaje_usuario}
-    Gabriel:"""
-    
-    response = openai.Completion.create(
-        engine="text-davinci-003",
-        prompt=prompt,
-        max_tokens=100
-    )
-    
-    return response["choices"][0]["text"].strip()
-
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -122,10 +114,20 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # **Usamos IA para entender preguntas generales**
-    if estado_usuario is None:
-        respuesta_ia = generar_respuesta_ia(incoming_msg)
-        msg.body(respuesta_ia)
+    # **Si el usuario pregunta por un tratamiento, Gabriel responde directamente**
+    for tratamiento in TRATAMIENTOS:
+        if tratamiento in incoming_msg:
+            msg.body(TRATAMIENTOS[tratamiento])
+            return str(resp)
+
+    # 📌 Si pregunta por una oferta, redirigirlo al enlace de Facebook
+    if "oferta" in incoming_msg or "promoción" in incoming_msg:
+        msg.body("💰 Puedes ver nuestras ofertas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢")
+        return str(resp)
+
+    # 📌 Si pregunta por la ubicación
+    if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
+        msg.body("📍 Estamos en Calle Colón 48, Valencia. ¡Te esperamos en Sonrisas Hollywood! 😊")
         return str(resp)
 
     # 📌 Flujo de reservas
@@ -156,29 +158,6 @@ def webhook():
         redis_client.set(sender + "_hora", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
         msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
-        return str(resp)
-
-    if estado_usuario == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
-        servicio = redis_client.get(sender + "_servicio")
-
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-
-        if cliente_id:
-            exito = crear_cita(cliente_id, nombre, telefono, fecha, hora, servicio)
-            if exito:
-                actualizar_notas_cliente(cliente_id, f"Cita para {servicio} el {fecha} a las {hora}.")
-                msg.body(f"✅ Cita registrada para {servicio} el {fecha} a las {hora}. ¡Nos vemos pronto! 😊")
-            else:
-                msg.body("⚠️ No se pudo registrar la cita. Inténtalo de nuevo.")
-        else:
-            msg.body("⚠️ No pude registrar tu cita porque no se pudo crear el cliente.")
-
         return str(resp)
 
     return str(resp)
