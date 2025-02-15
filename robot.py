@@ -27,6 +27,20 @@ HEADERS = {
 # ID de Gabriel en Koibox (Reemplazar con el real)
 GABRIEL_USER_ID = 1  
 
+# Función para hacer consultas a OpenAI
+def consultar_openai(mensaje):
+    try:
+        respuesta = openai.ChatCompletion.create(
+            model="gpt-4",  
+            messages=[
+                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde como un experto en odontología estética y medicina estética."},
+                {"role": "user", "content": mensaje}
+            ]
+        )
+        return respuesta["choices"][0]["message"]["content"]
+    except Exception as e:
+        return "Lo siento, pero en este momento no puedo procesar la información."
+
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
