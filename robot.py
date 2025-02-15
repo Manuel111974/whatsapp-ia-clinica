@@ -8,7 +8,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis
+# Configuración de Redis (Memoria a corto plazo)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -23,6 +23,9 @@ HEADERS = {
 
 # ID de Gabriel en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID correcto
+
+# Enlace a las ofertas
+OFERTAS_URL = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
 # 📌 Función para normalizar teléfonos
 def normalizar_telefono(telefono):
@@ -46,13 +49,13 @@ def buscar_cliente(telefono):
     return None
 
 # 🆕 Crear cliente en Koibox
-def crear_cliente(nombre, telefono, notas=""):
+def crear_cliente(nombre, telefono):
     telefono = normalizar_telefono(telefono)
     datos_cliente = {
         "nombre": nombre,
         "movil": telefono,
-        "notas": notas,
-        "is_anonymous": False
+        "notas": "Cliente registrado por Gabriel IA.",
+        "is_active": True
     }
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
 
@@ -60,91 +63,94 @@ def crear_cliente(nombre, telefono, notas=""):
         return response.json().get("id")
     return None
 
-# 📄 Guardar oferta mencionada en Koibox
-def guardar_oferta_en_nota(cliente_id, oferta):
+# 📄 Guardar notas en la ficha del paciente
+def agregar_nota_cliente(cliente_id, nota):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.get(url, headers=HEADERS)
     
     if response.status_code == 200:
-        datos_cliente = response.json()
-        notas_actuales = datos_cliente.get("notas", "")
-        nuevas_notas = notas_actuales + f"\nOferta mencionada: {oferta}"
-        
-        datos_actualizados = {"notas": nuevas_notas}
-        requests.put(url, headers=HEADERS, json=datos_actualizados)
+        cliente_data = response.json()
+        notas_actuales = cliente_data.get("notas", "")
+        nueva_nota = f"{notas_actuales}\n{nota}" if notas_actuales else nota
+
+        # Actualizar la ficha con la nueva nota
+        response = requests.patch(url, headers=HEADERS, json={"notas": nueva_nota})
+        return response.status_code == 200
+    return False
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "")
+    telefono = sender.replace("whatsapp:", "")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    estado_usuario = redis_client.get(sender + "_estado")
+    # Memoria de conversación con Redis
+    estado_usuario = redis_client.get(f"{telefono}_estado")
+    memoria = redis_client.get(f"{telefono}_memoria") or ""
 
-    # 📌 Si el mensaje menciona ofertas, lo registramos en la ficha del paciente
+    cliente_id = buscar_cliente(telefono) or crear_cliente("Paciente WhatsApp", telefono)
+
+    # 📌 Respuestas a saludos
+    saludos = ["hola", "buenas", "qué tal", "hey"]
+    if incoming_msg in saludos:
+        msg.body(f"¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+        return str(resp)
+
+    # 📌 Pregunta sobre ofertas
     if "oferta" in incoming_msg or "promoción" in incoming_msg:
-        telefono = sender.replace("whatsapp:", "")
-        cliente_id = buscar_cliente(telefono)
-        
-        if cliente_id:
-            guardar_oferta_en_nota(cliente_id, incoming_msg)
-            msg.body("✅ He registrado la oferta mencionada en tu ficha. ¿Necesitas más ayuda?")
-        else:
-            msg.body("❌ No encontré tu ficha en el sistema. ¿Podrías darme tu nombre completo?")
+        nota = f"Paciente preguntó por ofertas: {incoming_msg}"
+        agregar_nota_cliente(cliente_id, nota)
+        msg.body(f"💰 Aquí puedes ver nuestras ofertas actuales: {OFERTAS_URL}")
         return str(resp)
 
     # 📌 Flujo de citas
     if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
-        return str(resp)
-
-    if estado_usuario == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
-        msg.body(f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞.")
-        return str(resp)
-
-    if estado_usuario == "esperando_telefono":
-        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        msg.body("¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-14')")
-        return str(resp)
-
-    if estado_usuario == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
-        msg.body("Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '11:00')")
-        return str(resp)
-
-    if estado_usuario == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
-        msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
+        redis_client.set(f"{telefono}_estado", "esperando_servicio", ex=600)
+        msg.body("¡Genial! ¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉")
         return str(resp)
 
     if estado_usuario == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
-
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
-        servicio = redis_client.get(sender + "_servicio")
-
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono, f"Cita solicitada para {servicio} el {fecha} a las {hora}")
-
-        if cliente_id:
-            msg.body(f"✅ Tu cita para {servicio} ha sido registrada para el {fecha} a las {hora}.")
-        else:
-            msg.body("⚠️ No pude registrar tu cita porque no se pudo crear el cliente.")
-
+        redis_client.set(f"{telefono}_servicio", incoming_msg, ex=600)
+        redis_client.set(f"{telefono}_estado", "esperando_fecha", ex=600)
+        msg.body("¿Para qué fecha deseas la cita? 📅 (Ejemplo: '2025-02-17')")
         return str(resp)
 
-    # 📌 Respuesta por defecto si no se reconoce el mensaje
+    if estado_usuario == "esperando_fecha":
+        redis_client.set(f"{telefono}_fecha", incoming_msg, ex=600)
+        redis_client.set(f"{telefono}_estado", "esperando_hora", ex=600)
+        msg.body("¿A qué hora prefieres? ⏰ (Ejemplo: '17:00')")
+        return str(resp)
+
+    if estado_usuario == "esperando_hora":
+        redis_client.set(f"{telefono}_hora", incoming_msg, ex=600)
+        redis_client.set(f"{telefono}_estado", "confirmando_cita", ex=600)
+        
+        # Recuperar datos almacenados en Redis
+        servicio = redis_client.get(f"{telefono}_servicio")
+        fecha = redis_client.get(f"{telefono}_fecha")
+        hora = redis_client.get(f"{telefono}_hora")
+
+        nota = f"Paciente solicitó cita para {servicio} el {fecha} a las {hora}."
+        agregar_nota_cliente(cliente_id, nota)
+
+        msg.body(f"Voy a registrar tu cita para {servicio} el {fecha} a las {hora}. Un momento... ⏳")
+        return str(resp)
+
+    # 📌 Pregunta por la ubicación
+    if "ubicación" in incoming_msg or "dónde están" in incoming_msg:
+        msg.body("📍 Estamos ubicados en Calle Colón 48, Valencia. También puedes vernos en Google Maps aquí: https://g.co/kgs/U5uMgPg")
+        return str(resp)
+
+    # 📌 Pregunta sobre los servicios
+    if "qué servicios" in incoming_msg or "qué hacéis" in incoming_msg:
+        msg.body("Ofrecemos tratamientos de odontología estética y medicina estética. Algunos de nuestros tratamientos son: Diseño de sonrisa, carillas de composite y porcelana, ortodoncia invisible e implantología. ¿Te interesa algún en particular?")
+        return str(resp)
+
+    # 📌 Respuesta por defecto
     msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
