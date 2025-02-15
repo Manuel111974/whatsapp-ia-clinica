@@ -1,13 +1,14 @@
 import os
 import redis
 import requests
+import openai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
 # 🔧 Configuración de Flask
 app = Flask(__name__)
 
-# 🔧 Configuración de Redis (memoria para Gabriel)
+# 🔧 Configuración de Redis (memoria a corto plazo para recordar las conversaciones)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -19,7 +20,11 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 📌 ID de usuario para registrar las citas en Koibox (modificar si es necesario)
+# 🔧 Configuración de OpenAI (para mejorar respuestas)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
+
+# 📌 ID de usuario para registrar las citas en Koibox
 GABRIEL_USER_ID = 1  
 
 # 📌 Función para normalizar teléfonos
@@ -90,6 +95,22 @@ def calcular_hora_fin(hora_inicio, duracion_horas):
     h += duracion_horas
     return f"{h:02d}:{m:02d}"
 
+# 🤖 **Función para generar respuestas con IA**
+def generar_respuesta_ia(mensaje_usuario):
+    prompt = f"""
+    Eres Gabriel, un asistente IA de Sonrisas Hollywood. Responde a las preguntas de los pacientes de manera profesional y amigable.
+    
+    Paciente: {mensaje_usuario}
+    Gabriel:"""
+    
+    response = openai.Completion.create(
+        engine="text-davinci-003",
+        prompt=prompt,
+        max_tokens=100
+    )
+    
+    return response["choices"][0]["text"].strip()
+
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -101,9 +122,10 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # 🧠 Memoria de Gabriel
-    if incoming_msg in ["hola", "buenos días", "buenas tardes", "qué tal"]:
-        msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
+    # **Usamos IA para entender preguntas generales**
+    if estado_usuario is None:
+        respuesta_ia = generar_respuesta_ia(incoming_msg)
+        msg.body(respuesta_ia)
         return str(resp)
 
     # 📌 Flujo de reservas
@@ -159,7 +181,6 @@ def webhook():
 
         return str(resp)
 
-    msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
 if __name__ == "__main__":
