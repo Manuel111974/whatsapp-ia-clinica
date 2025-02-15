@@ -24,13 +24,13 @@ HEADERS = {
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# ID de Gabriel en Koibox (Reemplazar con el real)
-GABRIEL_USER_ID = 1  
+# Enlace de Facebook para ofertas
+OFERTAS_LINK = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
     sender = request.values.get("From", "").replace("whatsapp:", "")
 
     resp = MessagingResponse()
@@ -38,16 +38,24 @@ def webhook():
 
     estado_usuario = redis_client.get(sender + "_estado")
 
-    # 📌 Procesamiento de respuesta con OpenAI
-    respuesta_ia = consultar_openai(incoming_msg)
+    # 📌 Si el usuario pregunta por ofertas
+    if "oferta" in incoming_msg or "promoción" in incoming_msg or "descuento" in incoming_msg:
+        msg.body(f"💰 Puedes ver nuestras ofertas aquí: {OFERTAS_LINK} 📢")
+        redis_client.set(sender + "_mencion_oferta", "Sí", ex=3600)
+        return str(resp)
 
-    # 📌 Si el usuario quiere recordar su cita
+    # 📌 Si el usuario pregunta por su cita
     if "recordar cita" in incoming_msg or "mi cita" in incoming_msg:
         cita = redis_client.get(sender + "_cita_detalles")
         if cita:
             msg.body(f"✅ Tu cita está confirmada: {cita}")
         else:
             msg.body("⚠️ No encontré una cita registrada para ti. ¿Quieres reservar una ahora?")
+        return str(resp)
+
+    # 📌 Ubicación
+    if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
+        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. También puedes vernos aquí: https://g.co/kgs/U5uMgPg 😊")
         return str(resp)
 
     # 📌 Flujo de reserva de cita
@@ -84,28 +92,35 @@ def webhook():
         servicio = incoming_msg
         redis_client.set(sender + "_servicio", servicio, ex=3600)
 
-        # 📌 Guardar notas en Koibox
+        # 📌 Guardar datos en Koibox SOLO UNA VEZ
         nombre = redis_client.get(sender + "_nombre")
         telefono = redis_client.get(sender + "_telefono")
         fecha = redis_client.get(sender + "_fecha")
         hora = redis_client.get(sender + "_hora")
-
-        conversacion = redis_client.get(sender + "_conversacion") or ""
-        conversacion += f"\n{nombre} ha pedido {servicio} el {fecha} a las {hora}."
 
         cita_detalles = f"{nombre} ha reservado una cita para {servicio} el {fecha} a las {hora}."
         redis_client.set(sender + "_cita_detalles", cita_detalles, ex=86400)
 
         cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
         if cliente_id:
-            actualizar_notas(cliente_id, conversacion)
+            notas = f"✅ Cita registrada: {servicio} el {fecha} a las {hora}."
+            if redis_client.get(sender + "_mencion_oferta"):
+                notas += " 📌 El paciente mencionó una oferta."
+
+            actualizar_notas(cliente_id, notas)
             msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
         else:
             msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
 
         return str(resp)
 
+    # 📌 Cualquier otro mensaje después de la cita NO se registra en notas
+    if redis_client.get(sender + "_cita_detalles"):
+        msg.body("Estoy aquí para ayudarte con cualquier otra duda sobre nuestros tratamientos 😊.")
+        return str(resp)
+
     # 📌 Respuesta con IA si no está en un flujo de reserva de cita
+    respuesta_ia = consultar_openai(incoming_msg)
     if respuesta_ia:
         msg.body(respuesta_ia)
         return str(resp)
@@ -132,7 +147,7 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     return response.json().get("id") if response.status_code == 201 else None
 
-# 📝 Actualizar notas en Koibox con la conversación
+# 📝 Actualizar notas en Koibox SOLO UNA VEZ
 def actualizar_notas(cliente_id, notas):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.patch(url, headers=HEADERS, json={"notas": notas})
