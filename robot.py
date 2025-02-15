@@ -24,8 +24,9 @@ HEADERS = {
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# Enlace de Facebook para ofertas
-OFERTAS_LINK = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
+# Enlaces útiles
+UBICACION_CLINICA = "📍 Nos encontramos en Calle Colón 48, Valencia. También puedes vernos en Google Maps aquí: https://g.co/kgs/U5uMgPg 😊"
+OFERTAS_LINK = "💰 Puedes ver nuestras ofertas activas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢"
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -37,25 +38,26 @@ def webhook():
     msg = resp.message()
 
     estado_usuario = redis_client.get(sender + "_estado")
+    cita_confirmada = redis_client.get(sender + "_cita_confirmada")
 
-    # 📌 Si el usuario pregunta por ofertas
-    if "oferta" in incoming_msg or "promoción" in incoming_msg or "descuento" in incoming_msg:
-        msg.body(f"💰 Puedes ver nuestras ofertas aquí: {OFERTAS_LINK} 📢")
-        redis_client.set(sender + "_mencion_oferta", "Sí", ex=3600)
+    # 📍 Si el usuario pregunta por la ubicación de la clínica
+    if any(keyword in incoming_msg for keyword in ["ubicación", "dónde estáis", "cómo llegar", "dirección"]):
+        msg.body(UBICACION_CLINICA)
+        return str(resp)
+
+    # 🔗 Si el usuario pregunta por las ofertas
+    if "oferta" in incoming_msg or "descuento" in incoming_msg:
+        msg.body(OFERTAS_LINK)
         return str(resp)
 
     # 📌 Si el usuario pregunta por su cita
     if "recordar cita" in incoming_msg or "mi cita" in incoming_msg:
         cita = redis_client.get(sender + "_cita_detalles")
         if cita:
-            msg.body(f"✅ Tu cita está confirmada: {cita}")
+            msg.body(f"✅ Tu cita está confirmada: {cita}.\nSi necesitas modificarla, dime qué quieres cambiar: fecha, hora o tratamiento. 😊")
+            redis_client.set(sender + "_estado", "modificar_cita", ex=3600)
         else:
             msg.body("⚠️ No encontré una cita registrada para ti. ¿Quieres reservar una ahora?")
-        return str(resp)
-
-    # 📌 Ubicación
-    if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. También puedes vernos aquí: https://g.co/kgs/U5uMgPg 😊")
         return str(resp)
 
     # 📌 Flujo de reserva de cita
@@ -89,37 +91,12 @@ def webhook():
         return str(resp)
 
     if estado_usuario == "esperando_servicio":
-        servicio = incoming_msg
-        redis_client.set(sender + "_servicio", servicio, ex=3600)
-
-        # 📌 Guardar datos en Koibox SOLO UNA VEZ
-        nombre = redis_client.get(sender + "_nombre")
-        telefono = redis_client.get(sender + "_telefono")
-        fecha = redis_client.get(sender + "_fecha")
-        hora = redis_client.get(sender + "_hora")
-
-        cita_detalles = f"{nombre} ha reservado una cita para {servicio} el {fecha} a las {hora}."
-        redis_client.set(sender + "_cita_detalles", cita_detalles, ex=86400)
-
-        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
-        if cliente_id:
-            notas = f"✅ Cita registrada: {servicio} el {fecha} a las {hora}."
-            if redis_client.get(sender + "_mencion_oferta"):
-                notas += " 📌 El paciente mencionó una oferta."
-
-            actualizar_notas(cliente_id, notas)
-            msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
-        else:
-            msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
-
+        redis_client.set(sender + "_servicio", incoming_msg, ex=3600)
+        actualizar_cita(sender)
+        msg.body(f"✅ ¡Tu cita para {incoming_msg} ha sido registrada! 😊")
         return str(resp)
 
-    # 📌 Cualquier otro mensaje después de la cita NO se registra en notas
-    if redis_client.get(sender + "_cita_detalles"):
-        msg.body("Estoy aquí para ayudarte con cualquier otra duda sobre nuestros tratamientos 😊.")
-        return str(resp)
-
-    # 📌 Respuesta con IA si no está en un flujo de reserva de cita
+    # 📌 Respuesta con IA para otras preguntas
     respuesta_ia = consultar_openai(incoming_msg)
     if respuesta_ia:
         msg.body(respuesta_ia)
@@ -129,9 +106,24 @@ def webhook():
     msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
+# 📝 Función para actualizar la cita en Koibox y Redis
+def actualizar_cita(sender):
+    nombre = redis_client.get(sender + "_nombre")
+    telefono = redis_client.get(sender + "_telefono")
+    fecha = redis_client.get(sender + "_fecha")
+    hora = redis_client.get(sender + "_hora")
+    servicio = redis_client.get(sender + "_servicio")
+
+    cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+    if cliente_id:
+        cita_detalles = f"{nombre} tiene cita para {servicio} el {fecha} a las {hora}."
+        redis_client.set(sender + "_cita_detalles", cita_detalles, ex=86400)
+
+        notas = f"✅ Cita actualizada: {servicio} el {fecha} a las {hora}."
+        actualizar_notas(cliente_id, notas)
+
 # 🔍 Buscar cliente en Koibox
 def buscar_cliente(telefono):
-    telefono = telefono.strip().replace(" ", "").replace("-", "")
     url = f"{KOIBOX_URL}/clientes/"
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
@@ -147,25 +139,11 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     return response.json().get("id") if response.status_code == 201 else None
 
-# 📝 Actualizar notas en Koibox SOLO UNA VEZ
+# 📝 Actualizar notas en Koibox
 def actualizar_notas(cliente_id, notas):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.patch(url, headers=HEADERS, json={"notas": notas})
     return response.status_code == 200
-
-# 🤖 Procesamiento con OpenAI
-def consultar_openai(mensaje):
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood."},
-                {"role": "user", "content": mensaje}
-            ]
-        )
-        return response['choices'][0]['message']['content'].strip()
-    except Exception as e:
-        return "Lo siento, no puedo procesar tu solicitud en este momento."
 
 # 🚀 Lanzar aplicación
 if __name__ == "__main__":
