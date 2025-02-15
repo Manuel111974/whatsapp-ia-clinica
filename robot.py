@@ -116,14 +116,15 @@ def webhook():
         hora = redis_client.get(sender + "_hora")
         mencion_oferta = redis_client.get(sender + "_mencion_oferta")
 
-        notas = f"Solicitud de cita: {servicio}. Fecha: {fecha} - Hora: {hora}."
+        notas = f"📅 Cita para: {servicio}. Fecha: {fecha} - Hora: {hora}."
         if mencion_oferta:
             notas += " 📌 El paciente mencionó una oferta."
 
         cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
         if cliente_id:
             actualizar_notas(cliente_id, notas)
-            msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
+            exito, mensaje = crear_cita(cliente_id, fecha, hora, servicio)
+            msg.body(mensaje)
         else:
             msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
 
@@ -156,6 +157,12 @@ def actualizar_notas(cliente_id, notas):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.patch(url, headers=HEADERS, json={"notas": notas})
     return response.status_code == 200
+
+# 📆 Registrar cita en la agenda de Koibox
+def crear_cita(cliente_id, fecha, hora, servicio):
+    datos_cita = {"fecha": fecha, "hora_inicio": hora, "titulo": servicio, "cliente": cliente_id}
+    response = requests.post(f"{KOIBOX_URL}/agenda/cita/", headers=HEADERS, json=datos_cita)
+    return (True, "✅ ¡Tu cita ha sido registrada correctamente!") if response.status_code == 201 else (False, "⚠️ Error registrando la cita.")
 
 # 🚀 Lanzar aplicación
 if __name__ == "__main__":
