@@ -8,13 +8,9 @@ from twilio.twiml.messaging_response import MessagingResponse
 # Configuración de Flask
 app = Flask(__name__)
 
-# Configuración de Redis (memoria de Gabriel)
+# Configuración de Redis (Memoria de Gabriel)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-
-# Configuración de OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
 
 # Configuración de Koibox API
 KOIBOX_API_KEY = os.getenv("KOIBOX_API_KEY")
@@ -24,122 +20,98 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Configuración de OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
+
 # ID de Gabriel en Koibox (Reemplazar con el real)
 GABRIEL_USER_ID = 1  
-
-# Función para hacer consultas a OpenAI
-def consultar_openai(mensaje):
-    try:
-        respuesta = openai.ChatCompletion.create(
-            model="gpt-4",  
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde como un experto en odontología estética y medicina estética."},
-                {"role": "user", "content": mensaje}
-            ]
-        )
-        return respuesta["choices"][0]["message"]["content"]
-    except Exception as e:
-        return "Lo siento, pero en este momento no puedo procesar la información."
 
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "").replace("whatsapp:", "")
 
     resp = MessagingResponse()
     msg = resp.message()
 
-    # Recuperar información del paciente
-    nombre = redis_client.get(sender + "_nombre")
-    telefono = redis_client.get(sender + "_telefono")
-    fecha = redis_client.get(sender + "_fecha")
-    hora = redis_client.get(sender + "_hora")
-    servicio = redis_client.get(sender + "_servicio")
-
-    # 📌 Si el paciente ya ha hablado antes, lo recordamos
-    if nombre:
-        msg.body(f"¡Hola {nombre}! 😊 ¿En qué puedo ayudarte?")
-    else:
-        # Si es un mensaje de saludo inicial
-        if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
-            msg.body("¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
-            return str(resp)
-
-    # 📌 Ubicación de la clínica
-    if "dónde estáis" in incoming_msg or "ubicación" in incoming_msg:
-        msg.body("📍 Nos encontramos en Calle Colón 48, Valencia. También puedes vernos aquí: https://g.co/kgs/U5uMgPg 😊")
-        return str(resp)
-
-    # 📌 Información sobre ofertas
-    if "oferta" in incoming_msg or "promoción" in incoming_msg:
-        msg.body("💰 Puedes ver nuestras ofertas aquí: https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr 📢")
-        redis_client.set(sender + "_mencion_oferta", "Sí", ex=600)
-        return str(resp)
-
-    # 📌 Uso de OpenAI para responder preguntas generales sobre tratamientos
-    if any(x in incoming_msg for x in ["diseño de sonrisa", "ortodoncia", "botox", "hilos tensores", "implantes"]):
-        respuesta = consultar_openai(incoming_msg)
-        msg.body(respuesta)
-        return str(resp)
-
-    # 📌 Flujo de citas
-    if "cita" in incoming_msg or "reservar" in incoming_msg:
-        if nombre and telefono:
-            msg.body(f"¡Genial {nombre}! Veo que ya tenemos tu número ({telefono}). ¿Para qué fecha quieres la cita?")
-            redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
-        else:
-            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-            msg.body("¡Genial! Primero dime tu nombre completo 😊.")
-        return str(resp)
-
     estado_usuario = redis_client.get(sender + "_estado")
 
+    # 📌 Procesamiento de respuesta con OpenAI
+    respuesta_ia = consultar_openai(incoming_msg)
+
+    # 📌 Si el usuario quiere recordar su cita
+    if "recordar cita" in incoming_msg or "mi cita" in incoming_msg:
+        cita = redis_client.get(sender + "_cita_detalles")
+        if cita:
+            msg.body(f"✅ Tu cita está confirmada: {cita}")
+        else:
+            msg.body("⚠️ No encontré una cita registrada para ti. ¿Quieres reservar una ahora?")
+        return str(resp)
+
+    # 📌 Flujo de reserva de cita
+    if "cita" in incoming_msg or "reservar" in incoming_msg:
+        redis_client.set(sender + "_estado", "esperando_nombre", ex=3600)
+        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
+        return str(resp)
+
     if estado_usuario == "esperando_nombre":
-        redis_client.set(sender + "_nombre", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_telefono", ex=600)
+        redis_client.set(sender + "_nombre", incoming_msg, ex=3600)
+        redis_client.set(sender + "_estado", "esperando_telefono", ex=3600)
         msg.body(f"Gracias, {incoming_msg}. Ahora dime tu número de teléfono 📞.")
         return str(resp)
 
     if estado_usuario == "esperando_telefono":
-        redis_client.set(sender + "_telefono", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_fecha", ex=600)
+        redis_client.set(sender + "_telefono", incoming_msg, ex=3600)
+        redis_client.set(sender + "_estado", "esperando_fecha", ex=3600)
         msg.body("¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-14')")
         return str(resp)
 
     if estado_usuario == "esperando_fecha":
-        redis_client.set(sender + "_fecha", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_hora", ex=600)
+        redis_client.set(sender + "_fecha", incoming_msg, ex=3600)
+        redis_client.set(sender + "_estado", "esperando_hora", ex=3600)
         msg.body("Genial. ¿A qué hora te gustaría la cita? ⏰ (Ejemplo: '11:00')")
         return str(resp)
 
     if estado_usuario == "esperando_hora":
-        redis_client.set(sender + "_hora", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", "esperando_servicio", ex=600)
+        redis_client.set(sender + "_hora", incoming_msg, ex=3600)
+        redis_client.set(sender + "_estado", "esperando_servicio", ex=3600)
         msg.body("¿Qué tratamiento necesitas? (Ejemplo: 'Botox', 'Diseño de sonrisa') 💉.")
         return str(resp)
 
     if estado_usuario == "esperando_servicio":
-        redis_client.set(sender + "_servicio", incoming_msg, ex=600)
+        servicio = incoming_msg
+        redis_client.set(sender + "_servicio", servicio, ex=3600)
 
         # 📌 Guardar notas en Koibox
-        mencion_oferta = redis_client.get(sender + "_mencion_oferta")
-        notas = f"Solicitud de cita: {incoming_msg}. Fecha: {fecha} - Hora: {hora}."
-        if mencion_oferta:
-            notas += " 📌 El paciente mencionó una oferta."
+        nombre = redis_client.get(sender + "_nombre")
+        telefono = redis_client.get(sender + "_telefono")
+        fecha = redis_client.get(sender + "_fecha")
+        hora = redis_client.get(sender + "_hora")
+
+        conversacion = redis_client.get(sender + "_conversacion") or ""
+        conversacion += f"\n{nombre} ha pedido {servicio} el {fecha} a las {hora}."
+
+        cita_detalles = f"{nombre} ha reservado una cita para {servicio} el {fecha} a las {hora}."
+        redis_client.set(sender + "_cita_detalles", cita_detalles, ex=86400)
 
         cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
         if cliente_id:
-            actualizar_notas(cliente_id, notas)
-            msg.body(f"✅ ¡Tu cita para {incoming_msg} ha sido registrada el {fecha} a las {hora}! 😊")
+            actualizar_notas(cliente_id, conversacion)
+            msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
         else:
             msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
 
         return str(resp)
 
-    # 📌 Respuesta inteligente con OpenAI si no hay coincidencia
-    respuesta_ia = consultar_openai(incoming_msg)
-    msg.body(respuesta_ia)
+    # 📌 Respuesta con IA si no está en un flujo de reserva de cita
+    if respuesta_ia:
+        msg.body(respuesta_ia)
+        return str(resp)
+
+    # 📌 Respuesta por defecto
+    msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
     return str(resp)
 
 # 🔍 Buscar cliente en Koibox
@@ -160,11 +132,25 @@ def crear_cliente(nombre, telefono):
     response = requests.post(f"{KOIBOX_URL}/clientes/", headers=HEADERS, json=datos_cliente)
     return response.json().get("id") if response.status_code == 201 else None
 
-# 📝 Actualizar notas en Koibox
+# 📝 Actualizar notas en Koibox con la conversación
 def actualizar_notas(cliente_id, notas):
     url = f"{KOIBOX_URL}/clientes/{cliente_id}/"
     response = requests.patch(url, headers=HEADERS, json={"notas": notas})
     return response.status_code == 200
+
+# 🤖 Procesamiento con OpenAI
+def consultar_openai(mensaje):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood."},
+                {"role": "user", "content": mensaje}
+            ]
+        )
+        return response['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        return "Lo siento, no puedo procesar tu solicitud en este momento."
 
 # 🚀 Lanzar aplicación
 if __name__ == "__main__":
