@@ -3,6 +3,7 @@ import redis
 import requests
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+from openai import OpenAI
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -22,6 +23,10 @@ HEADERS = {
 
 # ID de Gabriel en Koibox
 GABRIEL_USER_ID = 1  # ⚠️ REEMPLAZAR con el ID correcto
+
+# API Key de OpenAI para mejorar la IA
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Enlace a las ofertas
 OFERTAS_URL = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
@@ -77,10 +82,21 @@ def agregar_nota_cliente(cliente_id, nota):
         return response.status_code == 200
     return False
 
+# 📩 Función para interpretar el mensaje con IA
+def interpretar_mensaje(mensaje):
+    response = openai_client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "Eres un asistente de atención al cliente para una clínica de estética y odontología."},
+            {"role": "user", "content": mensaje}
+        ]
+    )
+    return response.choices[0].message["content"]
+
 # 📩 Webhook de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "")
     telefono = sender.replace("whatsapp:", "")
 
@@ -89,13 +105,14 @@ def webhook():
 
     # Memoria de conversación con Redis
     estado_usuario = redis_client.get(f"{telefono}_estado")
-    memoria = redis_client.get(f"{telefono}_memoria") or ""
-
     cliente_id = buscar_cliente(telefono) or crear_cliente("Paciente WhatsApp", telefono)
+
+    # 📌 Pasar el mensaje por la IA para interpretarlo
+    respuesta_ia = interpretar_mensaje(incoming_msg)
 
     # 📌 Respuestas más naturales a saludos
     saludos = ["hola", "buenas", "qué tal", "hey"]
-    if incoming_msg in saludos:
+    if any(s in incoming_msg.lower() for s in saludos):
         if not redis_client.get(f"{telefono}_saludo"):
             msg.body(f"¡Hola! 😊 Soy Gabriel, el asistente de Sonrisas Hollywood. ¿En qué puedo ayudarte?")
             redis_client.set(f"{telefono}_saludo", "1", ex=600)
@@ -131,7 +148,7 @@ def webhook():
     if estado_usuario == "esperando_hora":
         redis_client.set(f"{telefono}_hora", incoming_msg, ex=600)
         redis_client.set(f"{telefono}_estado", "confirmando_cita", ex=600)
-        
+
         # Recuperar datos almacenados en Redis
         servicio = redis_client.get(f"{telefono}_servicio")
         fecha = redis_client.get(f"{telefono}_fecha")
@@ -143,18 +160,8 @@ def webhook():
         msg.body(f"Voy a registrar tu cita para {servicio} el {fecha} a las {hora}. Un momento... ⏳")
         return str(resp)
 
-    # 📌 Pregunta por la ubicación
-    if "ubicación" in incoming_msg or "dónde están" in incoming_msg:
-        msg.body("📍 Estamos ubicados en Calle Colón 48, Valencia. También puedes vernos en Google Maps aquí: https://g.co/kgs/U5uMgPg")
-        return str(resp)
-
-    # 📌 Pregunta sobre los servicios
-    if "qué servicios" in incoming_msg or "qué hacéis" in incoming_msg:
-        msg.body("Ofrecemos tratamientos de odontología estética y medicina estética. Algunos de nuestros tratamientos son: Diseño de sonrisa, carillas de composite y porcelana, ortodoncia invisible e implantología. ¿Te interesa algún en particular?")
-        return str(resp)
-
-    # 📌 Respuesta por defecto
-    msg.body("No entendí tu mensaje. ¿Podrías reformularlo? 😊")
+    # 📌 Respuesta flexible con IA
+    msg.body(respuesta_ia)
     return str(resp)
 
 if __name__ == "__main__":
