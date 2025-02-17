@@ -2,10 +2,9 @@ import os
 import redis
 import requests
 import openai
-from datetime import datetime, timedelta
-import time
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+from datetime import datetime, timedelta
 
 # Configuración de Flask
 app = Flask(__name__)
@@ -25,29 +24,27 @@ HEADERS = {
 # Configuración de OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Configuración de Twilio
-TWILIO_SID = os.getenv("TWILIO_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP = "whatsapp:+14155238886"  # Número de Twilio
-
 # Datos de la clínica
 UBICACION_CLINICA = "📍 Calle Colón 48, Valencia."
 GOOGLE_MAPS_LINK = "https://g.co/kgs/U5uMgPg"
 OFERTAS_LINK = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
-# Función para llamar a OpenAI
+# 📌 **Función para llamar a OpenAI y generar respuestas**
 def consultar_openai(mensaje):
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4",
-            messages=[{"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood."},
-                      {"role": "user", "content": mensaje}]
+            messages=[
+                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde de manera profesional y amable."},
+                {"role": "user", "content": mensaje}
+            ]
         )
         return response["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return "Lo siento, no pude procesar tu consulta en este momento. 😊"
+    except Exception as e:
+        print(f"⚠️ ERROR en OpenAI: {str(e)}")
+        return "Lo siento, no pude procesar tu consulta en este momento. Inténtalo más tarde. 😊"
 
-# 📩 Webhook de WhatsApp
+# 📩 **Webhook de WhatsApp**
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip().lower()
@@ -63,7 +60,7 @@ def webhook():
     hora = redis_client.get(sender + "_hora")
     servicio = redis_client.get(sender + "_servicio")
 
-    # 📌 Saludos
+    # 📌 **Saludo y presentación**
     if incoming_msg in ["hola", "buenas", "qué tal", "hey"]:
         if nombre:
             msg.body(f"¡Hola de nuevo, {nombre}! 😊 ¿En qué puedo ayudarte hoy?")
@@ -71,20 +68,31 @@ def webhook():
             msg.body("¡Hola! 😊 Soy *Gabriel*, el asistente de *Sonrisas Hollywood*. ¿En qué puedo ayudarte?")
         return str(resp)
 
-    # 📌 Recordar cita previa
+    # 📌 **Ubicación**
+    if any(word in incoming_msg for word in ["dónde estáis", "ubicación", "cómo llegar"]):
+        msg.body(f"{UBICACION_CLINICA}\n📌 *Google Maps*: {GOOGLE_MAPS_LINK}")
+        return str(resp)
+
+    # 📌 **Ofertas activas**
+    if "oferta" in incoming_msg:
+        msg.body(f"💰 *Consulta nuestras ofertas actuales aquí*: {OFERTAS_LINK} 📢")
+        return str(resp)
+
+    # 📌 **Consulta de cita existente**
     if "mi cita" in incoming_msg or "cuando tengo la cita" in incoming_msg:
-        cita_guardada = redis_client.get(sender + "_cita")
-        if cita_guardada:
-            cita_info = eval(cita_guardada)
-            msg.body(f"📅 Tu próxima cita es el *{cita_info['fecha']}* a las *{cita_info['hora']}* para *{cita_info['servicio']}*. 😊")
+        if fecha and hora and servicio:
+            msg.body(f"📅 Tu próxima cita es el *{fecha}* a las *{hora}* para *{servicio}* 😊")
         else:
             msg.body("No encuentro ninguna cita registrada a tu nombre. ¿Quieres agendar una?")
         return str(resp)
 
-    # 📌 Registro de Citas
+    # 📌 **Reservar cita**
     if "cita" in incoming_msg or "reservar" in incoming_msg:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
-        msg.body("¡Genial! Primero dime tu nombre completo 😊.")
+        if fecha and hora:
+            msg.body(f"📅 Ya tienes una cita programada el *{fecha}* a las *{hora}*. Si necesitas modificarla, dime 'Cambiar cita'.")
+        else:
+            redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+            msg.body("¡Genial! Primero dime tu nombre completo 😊.")
         return str(resp)
 
     if estado_usuario == "esperando_nombre":
@@ -114,48 +122,30 @@ def webhook():
     if estado_usuario == "esperando_servicio":
         redis_client.set(sender + "_servicio", incoming_msg, ex=600)
 
-        # Guardamos la cita en Redis
-        cita = {"nombre": nombre, "telefono": telefono, "fecha": fecha, "hora": hora, "servicio": servicio}
-        redis_client.set(sender + "_cita", str(cita), ex=604800)  # Guardar por 7 días
+        cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+        notas = f"Solicitud de cita para {servicio}. Fecha: {fecha} - Hora: {hora}."
 
-        msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
+        if cliente_id:
+            actualizar_notas(cliente_id, notas)
+            msg.body(f"✅ ¡Tu cita para {servicio} ha sido registrada el {fecha} a las {hora}! 😊")
+        else:
+            msg.body("⚠️ No se pudo completar la cita. Por favor, intenta nuevamente.")
+
         return str(resp)
 
-    # 📌 Respuesta Inteligente con OpenAI
+    # 📌 **Confirmación de citas 24h antes**
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    fecha_recordatorio = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if fecha == fecha_recordatorio:
+        msg.body(f"📅 *Recordatorio de cita:* Mañana tienes cita a las *{hora}* para *{servicio}*.\n"
+                 "¿Confirmas tu asistencia? Responde *Sí* o *No*.")
+
+    # 📌 **Uso de OpenAI para responder cualquier otra consulta**
     respuesta_ia = consultar_openai(incoming_msg)
     msg.body(respuesta_ia)
     return str(resp)
 
-# 📌 Función para enviar recordatorio 24h antes
-def enviar_recordatorio():
-    now = datetime.now()
-    
-    for key in redis_client.scan_iter("*_cita"):
-        datos_cita = redis_client.get(key)
-        if not datos_cita:
-            continue
-        
-        cita_info = eval(datos_cita)
-        fecha_cita = datetime.strptime(cita_info["fecha"] + " " + cita_info["hora"], "%Y-%m-%d %H:%M")
-        
-        if now + timedelta(hours=24) >= fecha_cita >= now:
-            mensaje = f"📅 ¡Hola {cita_info['nombre']}! Te recordamos tu cita en Sonrisas Hollywood para {cita_info['servicio']} mañana a las {cita_info['hora']}. ¿Confirmas tu asistencia? 😊"
-            numero_paciente = cita_info["telefono"]
-            
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json"
-            data = {
-                "From": TWILIO_WHATSAPP,
-                "To": f"whatsapp:{numero_paciente}",
-                "Body": mensaje,
-            }
-            requests.post(url, data=data, auth=(TWILIO_SID, TWILIO_AUTH_TOKEN))
-
-            print(f"✅ Recordatorio enviado a {numero_paciente} para {cita_info['fecha']} a las {cita_info['hora']}")
-
-while True:
-    enviar_recordatorio()
-    time.sleep(3600)  # Revisa cada hora
-
-# 🚀 Lanzar aplicación
+# 🚀 **Lanzar la aplicación en Render**
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=True)
