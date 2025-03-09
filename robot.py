@@ -114,7 +114,7 @@ def webhook():
                  "No encuentro ninguna cita registrada. ¿Quieres agendar una?")
         return str(resp)
 
-    # 📌 **Reservar cita (flujo de conversación)**
+    # 📌 **Reservar cita (flujo de conversación y registro en Koibox)**
     estados = {
         "esperando_nombre": ("nombre", "Gracias, {value}. Ahora dime tu número de teléfono 📞.", "esperando_telefono"),
         "esperando_telefono": ("telefono", "¡Perfecto! ¿Qué día prefieres? 📅 (Ejemplo: '2025-02-14')", "esperando_fecha"),
@@ -132,7 +132,18 @@ def webhook():
         key, response_text, next_state = estados[estado_usuario]
         redis_client.set(sender + f"_{key}", incoming_msg, ex=600)
         redis_client.set(sender + "_estado", next_state, ex=600) if next_state else None
-        msg.body(response_text.format(value=incoming_msg, fecha=fecha, hora=hora))
+
+        if estado_usuario == "esperando_servicio":
+            cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+            if cliente_id:
+                actualizar_notas(cliente_id, f"Paciente interesado en {incoming_msg}. Cita solicitada para {fecha} a las {hora}.")
+                msg.body(f"✅ ¡Tu cita para *{incoming_msg}* ha sido registrada en Koibox el {fecha} a las {hora}! 😊")
+            else:
+                msg.body("⚠️ No se pudo registrar al paciente en Koibox. Intenta de nuevo más tarde.")
+
+        else:
+            msg.body(response_text.format(value=incoming_msg, fecha=fecha, hora=hora))
+
         return str(resp)
 
     # 📌 **Uso de OpenAI para responder cualquier otra consulta**
