@@ -29,21 +29,6 @@ UBICACION_CLINICA = "📍 Calle Colón 48, Valencia."
 GOOGLE_MAPS_LINK = "https://g.co/kgs/U5uMgPg"
 OFERTAS_LINK = "https://www.facebook.com/share/18e8U4AJTN/?mibextid=wwXIfr"
 
-# 📌 **Función para llamar a OpenAI y generar respuestas**
-def consultar_openai(mensaje):
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Eres Gabriel, el asistente de Sonrisas Hollywood. Responde de manera profesional y amable."},
-                {"role": "user", "content": mensaje}
-            ]
-        )
-        return response["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"⚠️ ERROR en OpenAI: {str(e)}")
-        return "Lo siento, no pude procesar tu consulta en este momento. Inténtalo más tarde. 😊"
-
 # 📌 **Funciones para interactuar con Koibox**
 def buscar_cliente(telefono):
     try:
@@ -64,8 +49,9 @@ def crear_cliente(nombre, telefono):
         print(f"⚠️ ERROR al crear cliente en Koibox: {str(e)}")
     return None
 
-def actualizar_notas(cliente_id, notas):
+def actualizar_notas(cliente_id, nombre, fecha, hora, servicio):
     try:
+        notas = f"Paciente: {nombre}\nFecha de cita: {fecha}\nHora: {hora}\nMotivo: {servicio}"
         data = {"notas": notas}
         response = requests.put(f"{KOIBOX_URL}/clientes/{cliente_id}", headers=HEADERS, json=data)
         return response.status_code == 200
@@ -82,14 +68,15 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
 
-    # Obtener estado y datos del usuario en una sola consulta
+    # 📌 **Cargar datos del paciente en Redis con un solo acceso**
+    paciente_key = f"paciente:{sender}"
     estado_usuario, nombre, telefono, fecha, hora, servicio = redis_client.mget(
-        sender + "_estado",
-        sender + "_nombre",
-        sender + "_telefono",
-        sender + "_fecha",
-        sender + "_hora",
-        sender + "_servicio",
+        f"{paciente_key}:estado",
+        f"{paciente_key}:nombre",
+        f"{paciente_key}:telefono",
+        f"{paciente_key}:fecha",
+        f"{paciente_key}:hora",
+        f"{paciente_key}:servicio"
     )
 
     # 📌 **Saludo y presentación**
@@ -108,12 +95,6 @@ def webhook():
         msg.body(f"💰 *Consulta nuestras ofertas actuales aquí*: {OFERTAS_LINK} 📢")
         return str(resp)
 
-    # 📌 **Consulta de cita existente**
-    if "mi cita" in incoming_msg:
-        msg.body(f"📅 Tu próxima cita es el *{fecha}* a las *{hora}* para *{servicio}* 😊" if fecha else 
-                 "No encuentro ninguna cita registrada. ¿Quieres agendar una?")
-        return str(resp)
-
     # 📌 **Reservar cita (flujo de conversación y registro en Koibox)**
     estados = {
         "esperando_nombre": ("nombre", "Gracias, {value}. Ahora dime tu número de teléfono 📞.", "esperando_telefono"),
@@ -124,20 +105,27 @@ def webhook():
     }
 
     if incoming_msg in ["cita", "reservar"]:
-        redis_client.set(sender + "_estado", "esperando_nombre", ex=600)
+        redis_client.mset({f"{paciente_key}:estado": "esperando_nombre"})
+        redis_client.expire(paciente_key, 600)
         msg.body("¡Genial! Primero dime tu nombre completo 😊.")
         return str(resp)
 
     if estado_usuario in estados:
         key, response_text, next_state = estados[estado_usuario]
-        redis_client.set(sender + f"_{key}", incoming_msg, ex=600)
-        redis_client.set(sender + "_estado", next_state, ex=600) if next_state else None
+        redis_client.mset({f"{paciente_key}:{key}": incoming_msg})
+        if next_state:
+            redis_client.mset({f"{paciente_key}:estado": next_state})
+        redis_client.expire(paciente_key, 600)
 
         if estado_usuario == "esperando_servicio":
-            cliente_id = buscar_cliente(telefono) or crear_cliente(nombre, telefono)
+            cliente_id = buscar_cliente(telefono)
+
+            if not cliente_id:  # Si el cliente no existe, lo crea
+                cliente_id = crear_cliente(nombre, telefono)
+
             if cliente_id:
-                actualizar_notas(cliente_id, f"Paciente interesado en {incoming_msg}. Cita solicitada para {fecha} a las {hora}.")
-                msg.body(f"✅ ¡Tu cita para *{incoming_msg}* ha sido registrada en Koibox el {fecha} a las {hora}! 😊")
+                actualizar_notas(cliente_id, nombre, fecha, hora, incoming_msg)
+                msg.body(f"✅ ¡Tu cita ha sido registrada en Koibox! 📅 {fecha} ⏰ {hora} para *{incoming_msg}* 😊")
             else:
                 msg.body("⚠️ No se pudo registrar al paciente en Koibox. Intenta de nuevo más tarde.")
 
